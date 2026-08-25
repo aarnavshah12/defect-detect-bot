@@ -14,6 +14,8 @@ export ROBOFLOW_API_KEY=...          # never commit it
 
 All physical values live in `config.py`. Anything still `None` there is owner-provided and the
 scripts refuse to move the arm until it is filled in.
+To measure them: `python arm.py --jog --bootstrap` (keyboard jog; `t` = table Z, `k` = drop, `h` = home,
+`q` prints a `config.py` snippet).
 
 ## Build gates (do them in this order)
 

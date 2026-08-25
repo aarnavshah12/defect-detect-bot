@@ -40,14 +40,22 @@ CLI (owner tools):
     python arm.py --read             print the arm's current (x, y, z) and servo angles
     python arm.py --home             move to config.HOME_XYZ_MM
     python arm.py --xyz X Y Z        move to a point (validated)
-    python arm.py --jog              interactive: "x y z" move | r read | h home | s1/s0 suction | q quit
+    python arm.py --jog              keyboard jog; stamp HOME / TABLE_Z / DROP; prints a config.py snippet
+    python arm.py --jog --bootstrap  same, before config.py has reach limits: validates against the
+                                     firmware's own envelope (50 <= radius <= 300 mm, 0 <= z <= 255) instead
+
+Jog keys:  w/s = y -/+ (away / toward you)   a/d = x -/+   r/f = z up/down   1/2/3 = step 2/10/25 mm
+           p = read position   o = suction toggle   h = stamp HOME   t = stamp TABLE_Z (current z)
+           k = stamp DROP   g = go to stamped HOME   x = type an absolute "x y z"   q = quit + print snippet
 """
 
 from __future__ import annotations
 
 import argparse
 import glob
+import math
 import os
+import select
 import struct
 import sys
 import time
@@ -147,6 +155,22 @@ def nozzle_frame(sub: int) -> bytes:
 
 # ---------------------------------------------------------------- safety
 
+BOOTSTRAP_RADIUS_MM = (50.0, 300.0)  # firmware ignores radius < 50; 300 is well beyond the arm's reach
+BOOTSTRAP_Z_MM = (0.0, 255.0)        # firmware clamps z to 255
+
+
+def check_bootstrap(x: float, y: float, z: float) -> None:
+    """Envelope used ONLY by `--jog --bootstrap` before config.py has reach limits.
+
+    Small keyboard steps, owner present, firmware limits as the outer bound. Never used by pick.py.
+    """
+    r = math.hypot(x, y)
+    if not BOOTSTRAP_RADIUS_MM[0] <= r <= BOOTSTRAP_RADIUS_MM[1]:
+        raise UnsafeTarget(f"radius {r:.0f} outside bootstrap envelope {BOOTSTRAP_RADIUS_MM}")
+    if not BOOTSTRAP_Z_MM[0] <= z <= BOOTSTRAP_Z_MM[1]:
+        raise UnsafeTarget(f"z={z:.0f} outside bootstrap envelope {BOOTSTRAP_Z_MM}")
+
+
 def check_target(x: float, y: float, z: float) -> None:
     """Raise UnsafeTarget unless (x, y, z) is inside reach limits and z >= table Z."""
     table_z = config.require("TABLE_Z_MM")
@@ -161,10 +185,12 @@ def check_target(x: float, y: float, z: float) -> None:
 # ---------------------------------------------------------------- arm
 
 class Arm:
-    def __init__(self, port: str | None = None, baudrate: int | None = None, dry_run: bool = False):
+    def __init__(self, port: str | None = None, baudrate: int | None = None, dry_run: bool = False,
+                 bootstrap: bool = False):
         self.port = port or config.SERIAL_PORT
         self.baudrate = baudrate or config.BAUDRATE
         self.dry_run = dry_run
+        self.bootstrap = bootstrap  # jog-only: validate against firmware limits instead of config
         self._ser = None
         self._cleared = False
         self.log = runlog.get_logger()
@@ -271,7 +297,7 @@ class Arm:
         """
         ms = config.MOVE_MS if ms is None else int(ms)
         try:
-            check_target(x, y, z)
+            (check_bootstrap if self.bootstrap else check_target)(x, y, z)
         except UnsafeTarget as e:
             self.log.error("arm: REFUSED target (%.1f, %.1f, %.1f): %s", x, y, z, e)
             raise
@@ -340,31 +366,114 @@ def _probe(port: str) -> None:
             print(f"  {baud:6d} baud: {e}")
 
 
+def _getch(timeout: float = 0.05) -> str | None:
+    if select.select([sys.stdin], [], [], timeout)[0]:
+        return sys.stdin.read(1)
+    return None
+
+
 def _jog(a: Arm) -> None:
-    print('Commands: "x y z" move (mm) | "x y z ms" | r read | h home | s1 suction on | s0 off | q quit')
-    while True:
+    """Keyboard jog (same keys as the connect-4 jog.py). Prints a config.py snippet on quit."""
+    import termios
+    import tty
+
+    steps = {"1": 2, "2": 10, "3": 25}
+    step = 10
+    pos = list(a.read_xyz() or (0, 0, 0))
+    stamped: dict[str, object] = {}
+    lo = list(pos)
+    hi = list(pos)
+    pumping = False
+    print(f"arm at {pos}. step {step} mm. w/s y  a/d x  r/f z  1/2/3 step  p read  o suction  "
+          f"h HOME  t TABLE_Z  k DROP  g go-home  x absolute  q quit")
+    if a.bootstrap:
+        print("BOOTSTRAP envelope in use (config reach limits not set): keep steps small, watch the arm.")
+
+    def track(p):
+        for i in range(3):
+            lo[i], hi[i] = min(lo[i], p[i]), max(hi[i], p[i])
+
+    def goto(target, ms=400):
+        nonlocal pos
         try:
-            line = input("arm> ").strip().lower()
-        except EOFError:
-            break
-        if line in ("q", "quit"):
-            break
-        try:
-            if line == "r":
-                print("xyz =", a.read_xyz(), "angles =", a.read_angles())
-            elif line == "h":
-                print("at", a.home())
-            elif line in ("s1", "s0"):
-                a.suction(line == "s1")
-            else:
-                parts = [float(p) for p in line.split()]
-                if len(parts) not in (3, 4):
-                    print("expected: x y z [ms]")
-                    continue
-                ms = int(parts[3]) if len(parts) == 4 else config.MOVE_MS
-                print("at", a.move_to(parts[0], parts[1], parts[2], ms))
-        except (UnsafeTarget, ValueError, config.ConfigError, ArmError) as e:
-            print("refused:", e)
+            real = a.move_to(target[0], target[1], target[2], ms)
+        except MoveRefused as e:
+            real = a.read_xyz()
+            print(f"REFUSED {target} (out of the arm's reach): {e}; arm at {real}")
+        except (UnsafeTarget, ValueError, config.ConfigError) as e:
+            print(f"refused: {e}")
+            return
+        if real:
+            pos = list(real)
+            track(pos)
+        print(f"at {pos}")
+
+    old = termios.tcgetattr(sys.stdin)
+    tty.setcbreak(sys.stdin.fileno())
+    try:
+        while True:
+            k = _getch()
+            if k is None:
+                continue
+            if k in steps:
+                step = steps[k]
+                print(f"step {step} mm")
+            elif k in "wsadrf":
+                dx = {"a": -step, "d": step}.get(k, 0)
+                dy = {"w": -step, "s": step}.get(k, 0)  # forward (away from the base) is -Y
+                dz = {"f": -step, "r": step}.get(k, 0)
+                goto([pos[0] + dx, pos[1] + dy, pos[2] + dz])
+            elif k == "p":
+                real = a.read_xyz()
+                print(f"arm reports {real} angles {a.read_angles()}")
+                if real:
+                    pos = list(real)
+            elif k == "o":
+                pumping = not pumping
+                a.suction(pumping)
+                print("suction ON" if pumping else "released")
+            elif k == "h":
+                stamped["HOME_XYZ_MM"] = tuple(float(v) for v in pos)
+                print(f"HOME_XYZ_MM = {stamped['HOME_XYZ_MM']}")
+            elif k == "t":
+                stamped["TABLE_Z_MM"] = float(pos[2])
+                print(f"TABLE_Z_MM = {stamped['TABLE_Z_MM']}  (cup just touching the table here?)")
+            elif k == "k":
+                stamped["DROP_XYZ_MM"] = tuple(float(v) for v in pos)
+                print(f"DROP_XYZ_MM = {stamped['DROP_XYZ_MM']}")
+            elif k == "g":
+                if "HOME_XYZ_MM" in stamped:
+                    goto(list(stamped["HOME_XYZ_MM"]), 1500)
+                elif config.HOME_XYZ_MM:
+                    goto(list(config.HOME_XYZ_MM), 1500)
+                else:
+                    print("no HOME stamped yet (h)")
+            elif k == "x":
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)
+                try:
+                    parts = [float(v) for v in input("absolute x y z (mm): ").split()]
+                    if len(parts) == 3:
+                        goto(parts, 1000)
+                    else:
+                        print("expected three numbers")
+                except ValueError as e:
+                    print("bad input:", e)
+                finally:
+                    tty.setcbreak(sys.stdin.fileno())
+            elif k == "q":
+                break
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)
+        if pumping:
+            a.suction(False)
+    table_z = stamped.get("TABLE_Z_MM")
+    print("\n# --- paste into config.py (visited envelope this session; widen a little if you need to) ---")
+    for key in ("TABLE_Z_MM", "DROP_XYZ_MM", "HOME_XYZ_MM"):
+        print(f"{key} = {stamped[key]}" if key in stamped else f"# {key}: not stamped this session")
+    zmin = table_z if table_z is not None else lo[2]
+    print(f"REACH_X_MM = ({lo[0]:.1f}, {hi[0]:.1f})")
+    print(f"REACH_Y_MM = ({lo[1]:.1f}, {hi[1]:.1f})")
+    print(f"REACH_Z_MM = ({zmin:.1f}, {hi[2]:.1f})")
 
 
 def main() -> None:
@@ -376,12 +485,18 @@ def main() -> None:
     ap.add_argument("--home", action="store_true")
     ap.add_argument("--xyz", nargs=3, type=float, metavar=("X", "Y", "Z"))
     ap.add_argument("--jog", action="store_true")
+    ap.add_argument("--bootstrap", action="store_true",
+                    help="with --jog: use the firmware envelope when config.py reach limits are still None")
     args = ap.parse_args()
+    if args.bootstrap and not args.jog:
+        ap.error("--bootstrap only applies to --jog")
+    if args.jog and not args.bootstrap and config.missing_owner_values():
+        ap.error(f"config.py still has {config.missing_owner_values()} unset; use --jog --bootstrap to find them")
     runlog.start_run("arm")
     if args.probe:
         _probe(args.port or config.SERIAL_PORT)
         return
-    with Arm(args.port, args.baud) as a:
+    with Arm(args.port, args.baud, bootstrap=args.bootstrap) as a:
         if args.read:
             print("xyz =", a.read_xyz(), "angles =", a.read_angles())
         if args.home:

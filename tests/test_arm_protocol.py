@@ -84,6 +84,24 @@ def test_safety_rejects_bad_targets():
         _restore(saved)
 
 
+def test_bootstrap_envelope():
+    arm.check_bootstrap(0, -160, 150)
+    for bad in ((0, -20, 100), (0, -320, 100), (0, -160, 260), (0, -160, -1)):
+        try:
+            arm.check_bootstrap(*bad)
+        except arm.UnsafeTarget:
+            continue
+        raise AssertionError(f"expected UnsafeTarget for {bad}")
+    saved = config.TABLE_Z_MM
+    config.TABLE_Z_MM = None  # bootstrap arm must not need config values
+    try:
+        a = arm.Arm(port="/dev/fake", bootstrap=True)
+        a._ser = FakeSerial(); a._cleared = True; a.wait = lambda s: None
+        assert a.move_to(0, -160, 150) == (0, -160, 150)
+    finally:
+        config.TABLE_Z_MM = saved
+
+
 def test_unset_config_raises():
     saved = config.TABLE_Z_MM
     config.TABLE_Z_MM = None
