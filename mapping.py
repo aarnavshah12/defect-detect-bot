@@ -19,8 +19,9 @@ class CalibrationMissing(FileNotFoundError):
     pass
 
 
-def save_calibration(H: np.ndarray, pixel_pts, arm_pts, path: str = config.CALIBRATION_PATH) -> None:
+def save_calibration(H: np.ndarray, pixel_pts, arm_pts, path: str | None = None) -> None:
     """Persist the homography plus the point pairs it came from (for auditing)."""
+    path = path or config.CALIBRATION_PATH
     H = np.asarray(H, dtype=np.float64)
     if H.shape != (3, 3):
         raise ValueError(f"homography must be 3x3, got {H.shape}")
@@ -34,7 +35,8 @@ def save_calibration(H: np.ndarray, pixel_pts, arm_pts, path: str = config.CALIB
     np.save(path, payload, allow_pickle=True)
 
 
-def load_calibration(path: str = config.CALIBRATION_PATH) -> dict:
+def load_calibration(path: str | None = None) -> dict:
+    path = path or config.CALIBRATION_PATH
     if not os.path.exists(path):
         raise CalibrationMissing(
             f"{path} not found. The owner must run `python calibrate.py` on the physical rig first."
@@ -46,7 +48,7 @@ def load_calibration(path: str = config.CALIBRATION_PATH) -> dict:
     return data
 
 
-def load_homography(path: str = config.CALIBRATION_PATH) -> np.ndarray:
+def load_homography(path: str | None = None) -> np.ndarray:
     return load_calibration(path)["H"]
 
 

@@ -204,9 +204,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--verify", action="store_true")
     ap.add_argument("--check", action="store_true")
-    ap.add_argument("--camera", type=int, default=config.WEBCAM_INDEX)
-    ap.add_argument("--out", default=config.CALIBRATION_PATH)
+    ap.add_argument("--camera", type=int, default=None, help="default config.WEBCAM_INDEX")
+    ap.add_argument("--out", default=None, help="default config.CALIBRATION_PATH")
     args = ap.parse_args()
+    args.out = args.out or config.CALIBRATION_PATH
     if args.check:
         check(args.out)
     elif args.verify:

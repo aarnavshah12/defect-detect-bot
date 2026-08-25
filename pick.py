@@ -31,14 +31,14 @@ def _dist(a, b) -> float:
 class PickLoop:
     """The loop logic, separated from I/O so it can be unit-tested with fakes."""
 
-    def __init__(self, detector, arm, grab, H, target_class: str = config.TARGET_CLASS,
+    def __init__(self, detector, arm, grab, H, target_class: str | None = None,
                  dry_run: bool = False, once: bool = False, max_cycles: int = 20,
                  show=None):
         self.det = detector
         self.arm = arm
         self.grab = grab          # () -> BGR frame (always a FRESH frame)
         self.H = H
-        self.target_class = target_class
+        self.target_class = target_class or config.TARGET_CLASS
         self.dry_run = dry_run
         self.once = once
         self.max_cycles = max_cycles
@@ -158,8 +158,8 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="log + draw planned targets; no serial writes")
     ap.add_argument("--once", action="store_true", help="stop after one successful pick")
     ap.add_argument("--class", dest="target_class", default=config.TARGET_CLASS)
-    ap.add_argument("--camera", type=int, default=config.WEBCAM_INDEX)
-    ap.add_argument("--conf", type=float, default=config.CONFIDENCE)
+    ap.add_argument("--camera", type=int, default=None, help="default config.WEBCAM_INDEX")
+    ap.add_argument("--conf", type=float, default=None, help="default config.CONFIDENCE")
     ap.add_argument("--max-cycles", type=int, default=20)
     ap.add_argument("--no-window", action="store_true")
     args = ap.parse_args()

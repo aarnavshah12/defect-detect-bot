@@ -48,15 +48,16 @@ class Detection:
 class Detector:
     """Wraps the locally-run Roboflow model. Loads once; call .detect(frame) per frame."""
 
-    def __init__(self, model_id: str = config.MODEL_ID, confidence: float = config.CONFIDENCE,
-                 roi: tuple[int, int, int, int] | None = config.PICK_ROI, api_key: str | None = None):
+    def __init__(self, model_id: str | None = None, confidence: float | None = None,
+                 roi: tuple[int, int, int, int] | None = None, api_key: str | None = None):
         from inference import get_model  # heavy import; keep it here so unit tests can mock Detector
 
-        self.model_id = model_id
-        self.confidence = confidence
-        self.roi = roi
+        # Defaults resolve at call time so config edits/overrides are always honoured.
+        self.model_id = model_id or config.MODEL_ID
+        self.confidence = config.CONFIDENCE if confidence is None else confidence
+        self.roi = config.PICK_ROI if roi is None else roi
         t0 = time.time()
-        self.model = get_model(model_id=model_id, api_key=api_key or config.api_key())
+        self.model = get_model(model_id=self.model_id, api_key=api_key or config.api_key())
         self.class_names: list[str] = list(getattr(self.model, "class_names", None) or [])
         self.load_seconds = time.time() - t0
 
@@ -102,9 +103,11 @@ def dedupe(dets: list[Detection], iou_thresh: float = 0.6) -> list[Detection]:
     return kept
 
 
-def draw(frame: np.ndarray, dets: list[Detection], target_class: str = config.TARGET_CLASS,
-         roi: tuple[int, int, int, int] | None = config.PICK_ROI) -> np.ndarray:
+def draw(frame: np.ndarray, dets: list[Detection], target_class: str | None = None,
+         roi: tuple[int, int, int, int] | None = None) -> np.ndarray:
     """Return a copy of frame with boxes, labels, and the ROI outline."""
+    target_class = target_class or config.TARGET_CLASS
+    roi = config.PICK_ROI if roi is None else roi
     out = frame.copy()
     if roi is not None:
         x, y, w, h = roi
@@ -120,7 +123,8 @@ def draw(frame: np.ndarray, dets: list[Detection], target_class: str = config.TA
     return out
 
 
-def open_camera(index: int = config.WEBCAM_INDEX) -> cv2.VideoCapture:
+def open_camera(index: int | None = None) -> cv2.VideoCapture:
+    index = config.WEBCAM_INDEX if index is None else index
     cap = cv2.VideoCapture(index)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
@@ -151,8 +155,8 @@ def _parse_roi(s: str | None):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--image", help="run on a saved frame instead of the camera")
-    ap.add_argument("--camera", type=int, default=config.WEBCAM_INDEX)
-    ap.add_argument("--conf", type=float, default=config.CONFIDENCE)
+    ap.add_argument("--camera", type=int, default=None, help="default config.WEBCAM_INDEX")
+    ap.add_argument("--conf", type=float, default=None, help="default config.CONFIDENCE")
     ap.add_argument("--roi", type=_parse_roi, default=None, help="x,y,w,h pick-area crop (default config.PICK_ROI)")
     ap.add_argument("--no-window", action="store_true", help="do not open a GUI window (headless test)")
     ap.add_argument("--frames", type=int, default=0, help="stop after N camera frames (0 = until q)")
@@ -162,7 +166,7 @@ def main() -> None:
     log = runlog.start_run("detect")
     det = Detector(confidence=args.conf, roi=roi)
     log.info("model=%s classes=%s load=%.1fs roi=%s conf=%.2f", det.model_id, det.class_names,
-             det.load_seconds, roi, args.conf)
+             det.load_seconds, roi, det.confidence)
     if config.TARGET_CLASS not in det.class_names:
         log.warning("target class %r not in model classes %s", config.TARGET_CLASS, det.class_names)
 

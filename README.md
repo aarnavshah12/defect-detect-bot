@@ -17,10 +17,10 @@ scripts refuse to move the arm until it is filled in.
 
 ## Build gates (do them in this order)
 
-1. **SDK recon** — `PROGRESS.md` records the MaxArm serial protocol, function codes, units and the
-   open questions. Owner confirms it matches the kit (firmware = Hiwonder's *communication routine*,
-   micro-USB, 9600 baud). Then: `python arm.py --probe` (no motion, but opening the port may reset
-   the ESP32) and `python arm.py --read`.
+1. **SDK recon** — `PROGRESS.md` (and `docs/maxarm-sdk-recon.md`) record the MaxArm serial protocol,
+   function codes, units and boot behaviour, validated on this arm. Owner confirms the ESP32 still runs
+   Hiwonder's `MaxArm_micropython_microUSB` firmware (micro-USB, 9600 baud), then: `python arm.py --probe`
+   and `python arm.py --read` (no motion; power the arm on ≥ 15 s first — it homes itself at boot).
 2. **Detection standalone** — mount the camera, then `python detect.py`. Gate: `red` boxes on real red
    blocks, none on the mat. If small blocks are mislabelled, set `PICK_ROI` in `config.py` to the pick
    area (see `PROGRESS.md`) and re-check. `python detect.py --image frame.jpg` tests a saved frame.

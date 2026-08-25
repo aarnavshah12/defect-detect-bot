@@ -154,9 +154,9 @@ def check_target(x: float, y: float, z: float) -> None:
 # ---------------------------------------------------------------- arm
 
 class Arm:
-    def __init__(self, port: str = config.SERIAL_PORT, baudrate: int = config.BAUDRATE, dry_run: bool = False):
-        self.port = port
-        self.baudrate = baudrate
+    def __init__(self, port: str | None = None, baudrate: int | None = None, dry_run: bool = False):
+        self.port = port or config.SERIAL_PORT
+        self.baudrate = baudrate or config.BAUDRATE
         self.dry_run = dry_run
         self._ser = None
         self._cleared = False
@@ -250,8 +250,9 @@ class Arm:
         return struct.unpack("<hhh", data) if data and len(data) == 6 else None
 
     # -- motion ---------------------------------------------------------------
-    def move_to(self, x: float, y: float, z: float, ms: int = config.MOVE_MS) -> tuple[int, int, int] | None:
+    def move_to(self, x: float, y: float, z: float, ms: int | None = None) -> tuple[int, int, int] | None:
         """Validate, send, block until the commanded duration has elapsed, read back the position."""
+        ms = config.MOVE_MS if ms is None else ms
         try:
             check_target(x, y, z)
         except UnsafeTarget as e:
@@ -304,6 +305,7 @@ class Arm:
 def _probe(port: str) -> None:
     import serial
 
+    port = find_port(port)
     print(f"Probing {port} (no motion is commanded; a plain open does not reset the board).")
     for baud in (9600, 115200):
         try:
@@ -344,8 +346,8 @@ def _jog(a: Arm) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--port", default=config.SERIAL_PORT)
-    ap.add_argument("--baud", type=int, default=config.BAUDRATE)
+    ap.add_argument("--port", default=None, help="default config.SERIAL_PORT")
+    ap.add_argument("--baud", type=int, default=None, help="default config.BAUDRATE")
     ap.add_argument("--probe", action="store_true")
     ap.add_argument("--read", action="store_true")
     ap.add_argument("--home", action="store_true")
@@ -354,7 +356,7 @@ def main() -> None:
     args = ap.parse_args()
     runlog.start_run("arm")
     if args.probe:
-        _probe(args.port)
+        _probe(args.port or config.SERIAL_PORT)
         return
     with Arm(args.port, args.baud) as a:
         if args.read:
