@@ -91,10 +91,21 @@ def require(name: str):
 
 
 def api_key() -> str:
+    """ROBOFLOW_API_KEY from the environment, else from .claude/settings.local.json (gitignored)."""
     key = os.environ.get(API_KEY_ENV)
-    if not key:
-        raise ConfigError(f"Environment variable {API_KEY_ENV} is not set.")
-    return key
+    if key:
+        return key
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".claude", "settings.local.json")
+    try:
+        import json
+
+        with open(local) as f:
+            key = json.load(f).get("env", {}).get(API_KEY_ENV)
+    except (OSError, ValueError):
+        key = None
+    if key:
+        return key
+    raise ConfigError(f"{API_KEY_ENV} is not set: export it, or put it under env.{API_KEY_ENV} in {local}")
 
 
 def missing_owner_values() -> list[str]:
