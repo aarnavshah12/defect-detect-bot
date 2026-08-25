@@ -51,7 +51,7 @@ class FakeDetector:
 
 def test_auto_collect_builds_a_valid_calibration():
     config.TARGET_CLASS = "blue"
-    arm = FakeArm(refuse={(150.0, -200.0)})
+    arm = FakeArm(refuse={calibrate.AUTO_GRID[-1]})  # the last grid point is "unreachable"
     block = {"xy": (0.0, 0.0)}
     answers = iter(["", "", "s", "", "", "", "", "", ""])  # skip the 3rd point by hand
 
@@ -63,7 +63,7 @@ def test_auto_collect_builds_a_valid_calibration():
     log = logging.getLogger("test")
     px, ar = calibrate.auto_collect(calibrate.AUTO_GRID, arm, lambda: np.zeros((10, 10, 3), np.uint8), det, ask,
                                     "blue", 47.0, log)
-    assert len(px) == 7  # 9 points - 1 refused - 1 skipped
+    assert len(px) == len(calibrate.AUTO_GRID) - 2  # one refused, one skipped by hand
     H, _ = mapping.fit_homography(px, ar)
     x, y = mapping.pixel_to_arm(4 * 40 + 960, -4 * (-170) + 100, H)
     assert abs(x - 40) < 0.5 and abs(y + 170) < 0.5
