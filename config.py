@@ -22,6 +22,11 @@ API_KEY_ENV = "ROBOFLOW_API_KEY"
 # Exact class string as it appears on the dashboard (classes: blue, green, red, yellow).
 TARGET_CLASS = "red"
 CONFIDENCE = 0.5  # minimum detection confidence
+# Optional pick-area region of interest (x, y, w, h) in FULL-FRAME pixels. Detection runs on
+# this crop and centres are mapped back to full-frame pixels, so calibration is unaffected.
+# Set it once the camera is mounted: the model was trained with blocks large in frame and
+# mislabels small blocks when fed the whole 1080p frame (measured 2026-08-25). None = full frame.
+PICK_ROI: tuple[int, int, int, int] | None = None
 
 # --------------------------------------------------------------------------
 # Camera
