@@ -1,0 +1,334 @@
+"""Thin laptop-side wrapper over the Hiwonder MaxArm serial protocol.
+
+Source: Hiwonder MaxArm docs, section 10 "MaxArm Serial Communication"
+(https://docs.hiwonder.com/projects/MaxArm/en/latest/docs/10.MaxArm_Serial_Communication_formatted.html).
+The ESP32 on the arm runs Hiwonder's communication-routine firmware and listens on the micro-USB
+serial port at 9600 baud for frames:
+
+    0xAA 0x55 | func | len | data... | check        check = (~(func + len + sum(data))) & 0xFF
+
+    FUNC_SET_XYZ           0x03  data = int16 x, int16 y, int16 z (mm, little-endian) + uint16 ms
+    FUNC_SET_SUCTIONNOZZLE 0x07  data = 1 pump on | 2 pump off + valve open (release) | 3 valve close
+    FUNC_READ_XYZ          0x13  reply 0xAA 0x55 0x13 0x06 <hhh> check
+    FUNC_READ_ANGLE        0x11  reply 0xAA 0x55 0x11 0x06 <hhh> check
+
+The arm's own inverse kinematics does the servo math; we only ever send end-effector (x, y, z).
+Motion commands have NO completion acknowledgement, so move_to() waits the commanded duration
+(plus a margin) and then reads the position back.
+
+Safety (enforced here, not in comments): every target must be inside config.REACH_* and Z must be
+>= config.TABLE_Z_MM, otherwise UnsafeTarget is raised (logged) and nothing is sent. The first real
+motion in a process requires the owner to answer "Workspace clear? [y/N]".
+
+CLI (owner tools):
+    python arm.py --probe            open the port, try read_xyz at 9600 and 115200, no motion
+    python arm.py --read             print the arm's current (x, y, z) and servo angles
+    python arm.py --home             move to config.HOME_XYZ_MM
+    python arm.py --xyz X Y Z        move to a point (validated)
+    python arm.py --jog              interactive: "x y z" move | r read | h home | s1/s0 suction | q quit
+"""
+
+from __future__ import annotations
+
+import argparse
+import struct
+import sys
+import time
+
+import config
+import runlog
+
+HEADER = b"\xAA\x55"
+FUNC_SET_ANGLE = 0x01
+FUNC_SET_XYZ = 0x03
+FUNC_SET_PWMSERVO = 0x05
+FUNC_SET_SUCTIONNOZZLE = 0x07
+FUNC_READ_ANGLE = 0x11
+FUNC_READ_XYZ = 0x13
+
+NOZZLE_PUMP_ON = 1
+NOZZLE_PUMP_OFF_VALVE_OPEN = 2
+NOZZLE_VALVE_CLOSE = 3
+
+POSITION_TOLERANCE_MM = 3.0  # read-back mismatch above this is logged as a warning
+_READ_DELAY_S = 0.1          # the docs' MaxArm_ctl sleeps 0.1 s before reading a reply
+
+
+class ArmError(RuntimeError):
+    pass
+
+
+class UnsafeTarget(ValueError):
+    """Target outside the configured reach limits or below table Z. Never sent to the arm."""
+
+
+# ---------------------------------------------------------------- protocol helpers
+
+def checksum(body: bytes) -> int:
+    """(func + len + data) negated, low byte — per docs 10.1.5."""
+    return (~sum(body)) & 0xFF
+
+
+def build_frame(func: int, data: bytes = b"") -> bytes:
+    body = bytes([func & 0xFF, len(data) & 0xFF]) + bytes(data)
+    return HEADER + body + bytes([checksum(body)])
+
+
+def parse_frame(buf: bytes, expect_func: int) -> bytes | None:
+    """Find the first valid frame with function `expect_func` in buf; return its data bytes."""
+    i = 0
+    while True:
+        i = buf.find(HEADER, i)
+        if i < 0 or i + 4 > len(buf):
+            return None
+        func, length = buf[i + 2], buf[i + 3]
+        end = i + 4 + length
+        if end + 1 > len(buf):
+            return None
+        body = buf[i + 2:end]
+        if func == expect_func and buf[end] == checksum(body):
+            return bytes(buf[i + 4:end])
+        i += 2
+
+
+def set_xyz_frame(x: float, y: float, z: float, ms: int) -> bytes:
+    for name, v in (("x", x), ("y", y), ("z", z)):
+        if not -32768 <= int(round(v)) <= 32767:
+            raise UnsafeTarget(f"{name}={v} does not fit int16 mm")
+    if not 0 <= int(ms) <= 65535:
+        raise ValueError(f"duration {ms} ms does not fit uint16")
+    return build_frame(FUNC_SET_XYZ, struct.pack("<hhhH", int(round(x)), int(round(y)), int(round(z)), int(ms)))
+
+
+def nozzle_frame(sub: int) -> bytes:
+    if sub not in (NOZZLE_PUMP_ON, NOZZLE_PUMP_OFF_VALVE_OPEN, NOZZLE_VALVE_CLOSE):
+        raise ValueError(f"nozzle sub-function must be 1, 2 or 3, got {sub}")
+    return build_frame(FUNC_SET_SUCTIONNOZZLE, bytes([sub]))
+
+
+# ---------------------------------------------------------------- safety
+
+def check_target(x: float, y: float, z: float) -> None:
+    """Raise UnsafeTarget unless (x, y, z) is inside reach limits and z >= table Z."""
+    table_z = config.require("TABLE_Z_MM")
+    if z < table_z:
+        raise UnsafeTarget(f"z={z:.1f} is below table Z {table_z:.1f}")
+    for axis, v in (("X", x), ("Y", y), ("Z", z)):
+        lo, hi = config.require(f"REACH_{axis}_MM")
+        if not lo <= v <= hi:
+            raise UnsafeTarget(f"{axis}={v:.1f} outside reach [{lo}, {hi}]")
+
+
+# ---------------------------------------------------------------- arm
+
+class Arm:
+    def __init__(self, port: str = config.SERIAL_PORT, baudrate: int = config.BAUDRATE, dry_run: bool = False):
+        self.port = port
+        self.baudrate = baudrate
+        self.dry_run = dry_run
+        self._ser = None
+        self._cleared = False
+        self.log = runlog.get_logger()
+
+    # -- connection -------------------------------------------------------------
+    def connect(self) -> "Arm":
+        if self.dry_run:
+            self.log.info("[dry-run] arm: no serial connection (%s)", self.port)
+            return self
+        import serial  # pyserial
+
+        self.log.info("arm: opening %s @ %d", self.port, self.baudrate)
+        ser = serial.Serial()
+        ser.port = self.port
+        ser.baudrate = self.baudrate
+        ser.bytesize = serial.EIGHTBITS
+        ser.parity = serial.PARITY_NONE
+        ser.stopbits = serial.STOPBITS_ONE
+        ser.timeout = config.SERIAL_TIMEOUT_S
+        ser.write_timeout = config.SERIAL_TIMEOUT_S
+        # Keep DTR/RTS low: ESP32 dev boards reset when DTR/RTS toggle on open.
+        ser.dtr = False
+        ser.rts = False
+        try:
+            ser.open()
+        except serial.SerialException as e:
+            raise ArmError(f"cannot open {self.port}: {e}") from e
+        time.sleep(0.2)
+        ser.reset_input_buffer()
+        self._ser = ser
+        pos = self.read_xyz()
+        if pos is None:
+            self.log.warning("arm: no reply to read_xyz on %s @ %d (wrong baud? firmware not the "
+                             "communication routine?)", self.port, self.baudrate)
+        else:
+            self.log.info("arm: connected, current xyz=%s", pos)
+        return self
+
+    def close(self) -> None:
+        if self._ser is not None:
+            self._ser.close()
+            self._ser = None
+            self.log.info("arm: closed %s", self.port)
+
+    def __enter__(self) -> "Arm":
+        return self.connect()
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def confirm_workspace_clear(self) -> None:
+        """Ask once per process before any real motion. No default yes."""
+        if self.dry_run or self._cleared:
+            return
+        answer = input("Workspace clear? Arm is about to move. [y/N] ").strip().lower()
+        if answer != "y":
+            raise ArmError("owner did not confirm the workspace is clear; aborting before any motion")
+        self._cleared = True
+        self.log.info("arm: owner confirmed workspace clear")
+
+    # -- low level ------------------------------------------------------------
+    def _send(self, frame: bytes) -> None:
+        if self._ser is None:
+            raise ArmError("arm not connected (call connect())")
+        self._ser.write(frame)
+        self._ser.flush()
+
+    def _query(self, func: int, reply_len: int) -> bytes | None:
+        if self.dry_run:
+            return None
+        self._ser.reset_input_buffer()
+        self._send(build_frame(func))
+        time.sleep(_READ_DELAY_S)
+        buf = self._ser.read(reply_len)
+        return parse_frame(buf, func)
+
+    def read_xyz(self) -> tuple[int, int, int] | None:
+        data = self._query(FUNC_READ_XYZ, 11)
+        return struct.unpack("<hhh", data) if data and len(data) == 6 else None
+
+    def read_angles(self) -> tuple[int, int, int] | None:
+        data = self._query(FUNC_READ_ANGLE, 11)
+        return struct.unpack("<hhh", data) if data and len(data) == 6 else None
+
+    # -- motion ---------------------------------------------------------------
+    def move_to(self, x: float, y: float, z: float, ms: int = config.MOVE_MS) -> tuple[int, int, int] | None:
+        """Validate, send, block until the commanded duration has elapsed, read back the position."""
+        try:
+            check_target(x, y, z)
+        except UnsafeTarget as e:
+            self.log.error("arm: REFUSED target (%.1f, %.1f, %.1f): %s", x, y, z, e)
+            raise
+        if self.dry_run:
+            self.log.info("[dry-run] arm: move_to(%.1f, %.1f, %.1f) %d ms", x, y, z, ms)
+            return None
+        self.confirm_workspace_clear()
+        frame = set_xyz_frame(x, y, z, ms)
+        self.log.info("arm: move_to(%.1f, %.1f, %.1f) %d ms frame=%s", x, y, z, ms, frame.hex())
+        t0 = time.time()
+        self._send(frame)
+        self.wait(min(ms / 1000.0 + 0.15, config.MOVE_TIMEOUT_S))
+        pos = self.read_xyz()
+        if pos is None:
+            self.log.warning("arm: no position read-back after move (%.2fs)", time.time() - t0)
+        else:
+            err = max(abs(pos[0] - x), abs(pos[1] - y), abs(pos[2] - z))
+            level = self.log.warning if err > POSITION_TOLERANCE_MM else self.log.info
+            level("arm: at %s after %.2fs (max axis error %.1f mm)", pos, time.time() - t0, err)
+        return pos
+
+    def home(self, ms: int = 1500) -> tuple[int, int, int] | None:
+        hx, hy, hz = config.require("HOME_XYZ_MM")
+        self.log.info("arm: home")
+        return self.move_to(hx, hy, hz, ms)
+
+    def suction(self, on: bool) -> None:
+        if self.dry_run:
+            self.log.info("[dry-run] arm: suction(%s)", on)
+            return
+        self.confirm_workspace_clear()
+        if on:
+            self.log.info("arm: suction ON (pump on)")
+            self._send(nozzle_frame(NOZZLE_PUMP_ON))
+        else:
+            self.log.info("arm: suction OFF (pump off + valve open, then valve close)")
+            self._send(nozzle_frame(NOZZLE_PUMP_OFF_VALVE_OPEN))
+            self.wait(0.2)  # docs: venting is very short
+            self._send(nozzle_frame(NOZZLE_VALVE_CLOSE))
+
+    @staticmethod
+    def wait(seconds: float) -> None:
+        time.sleep(max(0.0, seconds))
+
+
+# ---------------------------------------------------------------- CLI
+
+def _probe(port: str) -> None:
+    import serial
+
+    print(f"Probing {port}. NOTE: opening the port can reset the ESP32 (arm may re-home).")
+    if input("Continue? [y/N] ").strip().lower() != "y":
+        return
+    for baud in (9600, 115200):
+        try:
+            a = Arm(port, baud).connect()
+            pos, ang = a.read_xyz(), a.read_angles()
+            a.close()
+            print(f"  {baud:6d} baud: read_xyz={pos} read_angles={ang}")
+        except (ArmError, serial.SerialException) as e:
+            print(f"  {baud:6d} baud: {e}")
+
+
+def _jog(a: Arm) -> None:
+    print('Commands: "x y z" move (mm) | "x y z ms" | r read | h home | s1 suction on | s0 off | q quit')
+    while True:
+        try:
+            line = input("arm> ").strip().lower()
+        except EOFError:
+            break
+        if line in ("q", "quit"):
+            break
+        try:
+            if line == "r":
+                print("xyz =", a.read_xyz(), "angles =", a.read_angles())
+            elif line == "h":
+                print("at", a.home())
+            elif line in ("s1", "s0"):
+                a.suction(line == "s1")
+            else:
+                parts = [float(p) for p in line.split()]
+                if len(parts) not in (3, 4):
+                    print("expected: x y z [ms]")
+                    continue
+                ms = int(parts[3]) if len(parts) == 4 else config.MOVE_MS
+                print("at", a.move_to(parts[0], parts[1], parts[2], ms))
+        except (UnsafeTarget, ValueError, config.ConfigError) as e:
+            print("refused:", e)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--port", default=config.SERIAL_PORT)
+    ap.add_argument("--baud", type=int, default=config.BAUDRATE)
+    ap.add_argument("--probe", action="store_true")
+    ap.add_argument("--read", action="store_true")
+    ap.add_argument("--home", action="store_true")
+    ap.add_argument("--xyz", nargs=3, type=float, metavar=("X", "Y", "Z"))
+    ap.add_argument("--jog", action="store_true")
+    args = ap.parse_args()
+    runlog.start_run("arm")
+    if args.probe:
+        _probe(args.port)
+        return
+    with Arm(args.port, args.baud) as a:
+        if args.read:
+            print("xyz =", a.read_xyz(), "angles =", a.read_angles())
+        if args.home:
+            print("at", a.home())
+        if args.xyz:
+            print("at", a.move_to(*args.xyz))
+        if args.jog:
+            _jog(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
