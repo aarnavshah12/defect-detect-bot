@@ -58,6 +58,8 @@ class FakeArm:
 def _setup():
     config.TARGET_CLASS = "red"  # tests are written around red blocks regardless of the owner's default
     config.TABLE_Z_MM = 60.0
+    config.BLOCK_HEIGHT_MM = 0.0  # tests assert on table-level picks
+    config.CUP_PRESS_MM = 0.0
     config.TRAVEL_Z_MM = 160.0
     config.DROP_XYZ_MM = (150.0, -150.0, 70.0)
     config.HOME_XYZ_MM = (0.0, -160.0, 210.0)

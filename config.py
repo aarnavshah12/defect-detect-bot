@@ -58,7 +58,11 @@ MOVE_MS = 1000
 
 # Owner-provided (jogged 2026-08-25): arm Z (mm) where the suction cup just touches the table.
 TABLE_Z_MM: float | None = 47.0  # measured with arm.py --jog, 2026-08-25
-# Hover height above table / drop zone (mm): the slow, vertical final approach.
+# Blocks are 4x4 cm (Hiwonder kit). The cup grabs the TOP of a block sitting on the table, so the pick
+# height is TABLE_Z + BLOCK_HEIGHT - CUP_PRESS (the rubber cup squashes a few mm to seal).
+BLOCK_HEIGHT_MM = 40.0
+CUP_PRESS_MM = 5.0
+# Hover height above the pick / drop point (mm): the slow, vertical final approach.
 HOVER_OFFSET_MM = 40.0
 # ALL sideways travel happens at this absolute Z (mm). Must clear a 40 mm block on the table while the
 # cup is carrying another 40 mm block: table Z + 40 + 40 + margin. Owner can raise it if blocks are taller.

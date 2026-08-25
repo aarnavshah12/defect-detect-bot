@@ -47,6 +47,7 @@ class PickLoop:
         self.planned: list[tuple[float, float]] = []  # dry-run: spots already given a planned target
         self.picks = 0
         self.table_z = config.require("TABLE_Z_MM")
+        self.pick_z = self.table_z + config.BLOCK_HEIGHT_MM - config.CUP_PRESS_MM  # cup on the block's top
         self.hover = config.HOVER_OFFSET_MM
         self.travel_z = config.TRAVEL_Z_MM
         self.drop = config.require("DROP_XYZ_MM")
@@ -67,7 +68,7 @@ class PickLoop:
         vis = detect.draw(frame, dets, self.target_class)
         if target is not None:
             cv2.circle(vis, (int(target.cx), int(target.cy)), 14, (255, 255, 255), 2)
-            cv2.putText(vis, f"pick -> arm ({x:.0f}, {y:.0f}, {self.table_z:.0f})",
+            cv2.putText(vis, f"pick -> arm ({x:.0f}, {y:.0f}, {self.pick_z:.0f})",
                         (int(target.cx) + 16, int(target.cy) + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                         (255, 255, 255), 2)
         for spot in self.ignored:
@@ -105,12 +106,12 @@ class PickLoop:
         x, y = mapping.pixel_to_arm(target.cx, target.cy, self.H)
         vis = self._annotate(frame, dets, target, x, y)
         path = runlog.save_frame(vis, f"cycle{n:03d}-target")
-        self.log.info("target %s -> arm=(%.1f, %.1f) z=%.1f frame=%s", target, x, y, self.table_z, path)
+        self.log.info("target %s -> arm=(%.1f, %.1f) pick z=%.1f frame=%s", target, x, y, self.pick_z, path)
         if self.show:
             self.show(vis)
 
         try:
-            arm_mod.check_target(x, y, self.table_z)
+            arm_mod.check_target(x, y, self.pick_z)
         except arm_mod.UnsafeTarget as e:
             self.log.warning("skip: target outside reach (%s); ignoring this spot for the session", e)
             self.ignored.append((target.cx, target.cy))
@@ -118,11 +119,11 @@ class PickLoop:
 
         spot = (target.cx, target.cy)
         if self.dry_run:
-            self.log.info("[dry-run] would pick at (%.1f, %.1f, %.1f) and drop at %s", x, y, self.table_z, self.drop)
+            self.log.info("[dry-run] would pick at (%.1f, %.1f, %.1f) and drop at %s", x, y, self.pick_z, self.drop)
             self.planned.append(spot)
 
         a = self.arm
-        hover_z = self.table_z + self.hover
+        hover_z = self.pick_z + self.hover
         tz = self.travel_z
         dx, dy, dz = self.drop
         at_drop = False
@@ -130,7 +131,7 @@ class PickLoop:
             # Sideways moves only at travel height; vertical moves only above the spot.
             a.move_to(x, y, tz)
             a.move_to(x, y, hover_z)
-            a.move_to(x, y, self.table_z)
+            a.move_to(x, y, self.pick_z, 700)  # slow final descent onto the block
             a.suction(True)
             a.wait(config.SUCTION_ON_PAUSE_S)
             a.move_to(x, y, hover_z)
@@ -192,8 +193,11 @@ def check_fixed_targets() -> None:
     hx, hy, hz = config.require("HOME_XYZ_MM")
     table_z = config.require("TABLE_Z_MM")
     log = runlog.get_logger()
-    if tz < table_z + hover + 40.0:
-        raise SystemExit(f"config.TRAVEL_Z_MM={tz} is too low: needs >= TABLE_Z + HOVER + 40 mm block = {table_z + hover + 40:.0f}")
+    block = config.BLOCK_HEIGHT_MM
+    min_travel = table_z + 2 * block + 10.0  # a carried block must clear a block on the table
+    if tz < min_travel:
+        raise SystemExit(f"config.TRAVEL_Z_MM={tz} is too low: needs >= TABLE_Z + 2 x BLOCK_HEIGHT + 10 = {min_travel:.0f}")
+    pick_z = table_z + block - config.CUP_PRESS_MM
     for name, p in (("HOME_XYZ_MM", (hx, hy, hz)), ("DROP_XYZ_MM", (dx, dy, dz)),
                     ("drop hover", (dx, dy, dz + hover)), ("drop travel", (dx, dy, tz))):
         ext = arm_mod.extension_ratio(*p)
@@ -208,8 +212,8 @@ def check_fixed_targets() -> None:
         lo, hi = config.require("REACH_Z_MM")
         if not lo <= tz <= hi:
             raise arm_mod.UnsafeTarget(f"travel Z {tz:.1f} outside reach Z [{lo}, {hi}]")
-        if not lo <= table_z + hover <= hi:
-            raise arm_mod.UnsafeTarget(f"pick hover Z {table_z + hover:.1f} outside reach Z [{lo}, {hi}]")
+        if not lo <= pick_z + hover <= hi:
+            raise arm_mod.UnsafeTarget(f"pick hover Z {pick_z + hover:.1f} outside reach Z [{lo}, {hi}]")
     except arm_mod.UnsafeTarget as e:
         raise SystemExit(f"config.py HOME_XYZ_MM / DROP_XYZ_MM / TABLE_Z_MM+HOVER_OFFSET_MM outside REACH_*: {e}") from e
 
