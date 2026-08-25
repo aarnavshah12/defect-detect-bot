@@ -77,6 +77,10 @@ SUCTION_OFF_PAUSE_S = 0.3
 # Calibration / logging
 # --------------------------------------------------------------------------
 CALIBRATION_PATH = "calibration.npy"
+# Arm (x, y) mm spots for `calibrate.py --auto`. Keep them inside the camera's view: on 2026-08-25 the
+# view covered arm x from about -150 to +60 (x = +151 sat on the top edge and was clipped) and y down
+# to about -240. Spots the arm cannot reach are skipped automatically.
+CALIB_GRID = [(x, y) for y in (-100.0, -160.0, -230.0) for x in (-150.0, -60.0, 40.0)]
 LOG_DIR = "logs"
 # "Lift failed" check: same-class detection still within this many px of the pick spot.
 LIFT_FAIL_RADIUS_PX = 10.0

@@ -249,7 +249,7 @@ def verify(camera: int, path: str) -> None:
 
 # --auto grid in arm mm (in front of the base, comfortably inside reach). Points the arm refuses or the
 # camera cannot see are skipped; at least mapping.MIN_PAIRS (ideally RECOMMENDED_PAIRS) must succeed.
-AUTO_GRID = [(x, y) for y in (-100.0, -150.0, -200.0) for x in (-150.0, 0.0, 150.0)]
+AUTO_GRID = config.CALIB_GRID
 PRESENT_CLEARANCE_MM = 50.0  # cup height above table Z while you slide the (40 mm) block under it
 
 
