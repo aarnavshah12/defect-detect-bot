@@ -39,9 +39,10 @@ FRAME_HEIGHT = 1080
 # --------------------------------------------------------------------------
 # Arm (Hiwonder MaxArm, ESP32 controller over USB serial)
 # --------------------------------------------------------------------------
-# Candidate found 2026-08-25: /dev/cu.usbserial-3110 (CH340 "USB Serial").  OWNER: confirm.
+# CH340 USB-serial of the arm. The number changes with the USB socket (-310 in the connect-4
+# project, -3110 on 2026-08-25); arm.py falls back to a lone /dev/cu.usbserial-* if this is absent.
 SERIAL_PORT = "/dev/cu.usbserial-3110"
-BAUDRATE = 115200  # from Hiwonder docs, section 10 (MaxArm_ctl default)
+BAUDRATE = 9600  # MaxArm_micropython_microUSB firmware: UART(1, 9600, tx=1, rx=3); validated 2026-08-17
 SERIAL_TIMEOUT_S = 1.0
 MOVE_TIMEOUT_S = 6.0  # hard cap on how long we wait for any single motion
 

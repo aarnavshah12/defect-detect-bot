@@ -13,6 +13,11 @@ def test_checksum_matches_doc_examples():
     assert arm.build_frame(arm.FUNC_READ_XYZ) == bytes.fromhex("AA551300EC")
 
 
+def test_set_xyz_frame_matches_doc_example():
+    # Hiwonder docs / master main.py: xyz (120, -180, 85) in 1000 ms
+    assert arm.set_xyz_frame(120, -180, 85, 1000) == bytes.fromhex("aa550308" "7800" "4cff" "5500" "e803" "f1")
+
+
 def test_set_xyz_frame_layout():
     f = arm.set_xyz_frame(120, -30, 85, 1000)
     assert f[:2] == b"\xAA\x55" and f[2] == 0x03 and f[3] == 0x08
@@ -31,13 +36,17 @@ def test_nozzle_frames():
         raise AssertionError("expected ValueError")
 
 
-def test_parse_reply_with_noise_and_bad_checksum():
+def test_parse_reply_firmware_checksum_and_noise():
     body = bytes([0x13, 0x06]) + (100).to_bytes(2, "little", signed=True) + (-20).to_bytes(2, "little", signed=True) + (60).to_bytes(2, "little", signed=True)
-    good = b"\xAA\x55" + body + bytes([arm.checksum(body)])
-    bad = b"\xAA\x55" + body + bytes([(arm.checksum(body) + 1) & 0xFF])
-    assert arm.parse_frame(b"\x00\xAA" + bad + good, 0x13) == body[2:]
+    frame = b"\xAA\x55" + body
+    fw_style = frame + bytes([arm.checksum(frame)])   # firmware: checksum over the whole frame
+    req_style = frame + bytes([arm.checksum(body)])   # request convention (also accepted)
+    bad = frame + bytes([(arm.checksum(frame) + 7) & 0xFF])
+    assert arm.checksum(frame) == (arm.checksum(body) + 1) & 0xFF
+    assert arm.parse_frame(b"\x00\xAA" + bad + fw_style, 0x13) == body[2:]
+    assert arm.parse_frame(req_style, 0x13) == body[2:]
     assert arm.parse_frame(bad, 0x13) is None
-    assert arm.parse_frame(good, 0x11) is None
+    assert arm.parse_frame(fw_style, 0x11) is None
 
 
 def test_safety_rejects_bad_targets(monkeypatch=None):

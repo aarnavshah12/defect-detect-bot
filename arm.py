@@ -12,6 +12,18 @@ serial port at 9600 baud for frames:
     FUNC_READ_XYZ          0x13  reply 0xAA 0x55 0x13 0x06 <hhh> check
     FUNC_READ_ANGLE        0x11  reply 0xAA 0x55 0x11 0x06 <hhh> check
 
+Reply frames are checksummed over the WHOLE frame including the 0xAA 0x55 header (firmware
+MaxArm_ctl.py: checksum_crc8(0, 0, send_data)); requests exclude the header. parse_frame()
+accepts both conventions.
+
+Hardware facts validated on this arm by the owner's connect-4 project (2026-08-17, see
+~/Documents/connect 4 bot/maxarm.py): Hiwonder's MaxArm_micropython_microUSB slave firmware is
+installed (it opens UART(1, 9600, tx=1, rx=3), i.e. the USB port); a plain port open does NOT reset
+the board, only a DTR/RTS pulse does; after power-on/reset the firmware sleeps 10 s then homes
+(~3 s) before it answers, so connect() polls read_xyz for up to READY_TIMEOUT_S; servo read-back
+agrees with the commanded target to within ~8 mm. The port number changes with the USB socket
+(/dev/cu.usbserial-310 then, -3110 now), so a lone /dev/cu.usbserial-* is used as fallback.
+
 The arm's own inverse kinematics does the servo math; we only ever send end-effector (x, y, z).
 Motion commands have NO completion acknowledgement, so move_to() waits the commanded duration
 (plus a margin) and then reads the position back.
@@ -31,6 +43,8 @@ CLI (owner tools):
 from __future__ import annotations
 
 import argparse
+import glob
+import os
 import struct
 import sys
 import time
@@ -50,8 +64,10 @@ NOZZLE_PUMP_ON = 1
 NOZZLE_PUMP_OFF_VALVE_OPEN = 2
 NOZZLE_VALVE_CLOSE = 3
 
-POSITION_TOLERANCE_MM = 3.0  # read-back mismatch above this is logged as a warning
+POSITION_TOLERANCE_MM = 8.0  # servo read-back quantisation (validated ~8 mm); above this -> warning
+READY_TIMEOUT_S = 25.0       # firmware sleeps 10 s + homes ~3 s after a reset before answering
 _READ_DELAY_S = 0.1          # the docs' MaxArm_ctl sleeps 0.1 s before reading a reply
+_SETTLE_S = 0.3              # margin added to every commanded move duration
 
 
 class ArmError(RuntimeError):
@@ -75,7 +91,11 @@ def build_frame(func: int, data: bytes = b"") -> bytes:
 
 
 def parse_frame(buf: bytes, expect_func: int) -> bytes | None:
-    """Find the first valid frame with function `expect_func` in buf; return its data bytes."""
+    """Find the first valid frame with function `expect_func` in buf; return its data bytes.
+
+    Accepts the firmware's reply convention (checksum over header+func+len+data) and the request
+    convention (func+len+data); they differ by exactly 1 because 0xAA + 0x55 == 0xFF.
+    """
     i = 0
     while True:
         i = buf.find(HEADER, i)
@@ -85,10 +105,22 @@ def parse_frame(buf: bytes, expect_func: int) -> bytes | None:
         end = i + 4 + length
         if end + 1 > len(buf):
             return None
-        body = buf[i + 2:end]
-        if func == expect_func and buf[end] == checksum(body):
+        if func == expect_func and buf[end] in (checksum(buf[i:end]), checksum(buf[i + 2:end])):
             return bytes(buf[i + 4:end])
         i += 2
+
+
+def find_port(preferred: str | None) -> str:
+    """The configured port if present, else the sole /dev/cu.usbserial-* device."""
+    if preferred and os.path.exists(preferred):
+        return preferred
+    candidates = sorted(glob.glob("/dev/cu.usbserial-*"))
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise ArmError(f"no MaxArm serial port found (looked for {preferred} and /dev/cu.usbserial-*); "
+                       f"is the arm plugged in and switched on?")
+    raise ArmError(f"several usbserial ports {candidates}; set config.SERIAL_PORT to the arm's")
 
 
 def set_xyz_frame(x: float, y: float, z: float, ms: int) -> bytes:
@@ -137,32 +169,35 @@ class Arm:
             return self
         import serial  # pyserial
 
+        self.port = find_port(self.port)
         self.log.info("arm: opening %s @ %d", self.port, self.baudrate)
-        ser = serial.Serial()
-        ser.port = self.port
-        ser.baudrate = self.baudrate
-        ser.bytesize = serial.EIGHTBITS
-        ser.parity = serial.PARITY_NONE
-        ser.stopbits = serial.STOPBITS_ONE
-        ser.timeout = config.SERIAL_TIMEOUT_S
-        ser.write_timeout = config.SERIAL_TIMEOUT_S
-        # Keep DTR/RTS low: ESP32 dev boards reset when DTR/RTS toggle on open.
-        ser.dtr = False
-        ser.rts = False
         try:
-            ser.open()
+            # Plain open with pyserial defaults: validated not to reset the board (only a DTR/RTS
+            # pulse does). Do not toggle dtr/rts here.
+            ser = serial.Serial(self.port, self.baudrate, timeout=config.SERIAL_TIMEOUT_S,
+                                write_timeout=config.SERIAL_TIMEOUT_S)
         except serial.SerialException as e:
             raise ArmError(f"cannot open {self.port}: {e}") from e
-        time.sleep(0.2)
+        time.sleep(0.1)
         ser.reset_input_buffer()
         self._ser = ser
-        pos = self.read_xyz()
+        pos = self.wait_ready()
         if pos is None:
-            self.log.warning("arm: no reply to read_xyz on %s @ %d (wrong baud? firmware not the "
-                             "communication routine?)", self.port, self.baudrate)
+            self.log.warning("arm: no reply to read_xyz on %s @ %d within %.0fs (wrong baud? firmware not "
+                             "MaxArm_micropython_microUSB? arm switched off?)", self.port, self.baudrate,
+                             READY_TIMEOUT_S)
         else:
             self.log.info("arm: connected, current xyz=%s", pos)
         return self
+
+    def wait_ready(self, timeout: float = READY_TIMEOUT_S) -> tuple[int, int, int] | None:
+        """Poll read_xyz until the firmware answers (after a reset it sleeps 10 s, then homes)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pos = self.read_xyz()
+            if pos is not None:
+                return pos
+        return None
 
     def close(self) -> None:
         if self._ser is not None:
@@ -200,7 +235,11 @@ class Arm:
         self._send(build_frame(func))
         time.sleep(_READ_DELAY_S)
         buf = self._ser.read(reply_len)
-        return parse_frame(buf, func)
+        data = parse_frame(buf, func)
+        if data is None and self._ser.in_waiting:
+            buf += self._ser.read(self._ser.in_waiting)
+            data = parse_frame(buf, func)
+        return data
 
     def read_xyz(self) -> tuple[int, int, int] | None:
         data = self._query(FUNC_READ_XYZ, 11)
@@ -226,7 +265,7 @@ class Arm:
         self.log.info("arm: move_to(%.1f, %.1f, %.1f) %d ms frame=%s", x, y, z, ms, frame.hex())
         t0 = time.time()
         self._send(frame)
-        self.wait(min(ms / 1000.0 + 0.15, config.MOVE_TIMEOUT_S))
+        self.wait(min(ms / 1000.0 + _SETTLE_S, config.MOVE_TIMEOUT_S))
         pos = self.read_xyz()
         if pos is None:
             self.log.warning("arm: no position read-back after move (%.2fs)", time.time() - t0)
@@ -265,9 +304,7 @@ class Arm:
 def _probe(port: str) -> None:
     import serial
 
-    print(f"Probing {port}. NOTE: opening the port can reset the ESP32 (arm may re-home).")
-    if input("Continue? [y/N] ").strip().lower() != "y":
-        return
+    print(f"Probing {port} (no motion is commanded; a plain open does not reset the board).")
     for baud in (9600, 115200):
         try:
             a = Arm(port, baud).connect()
