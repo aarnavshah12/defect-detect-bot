@@ -96,6 +96,8 @@ def test_dry_run_never_touches_serial():
 
 
 if __name__ == "__main__":
+    import tempfile
+    config.LOG_DIR = tempfile.mkdtemp()  # keep test logs out of logs/
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn()

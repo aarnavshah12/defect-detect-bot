@@ -116,7 +116,10 @@ def test_dry_run_and_once():
 
 
 if __name__ == "__main__":
+    import tempfile
+
     import runlog
+    config.LOG_DIR = tempfile.mkdtemp()  # keep test logs out of logs/
     runlog.start_run("test-pick")
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
