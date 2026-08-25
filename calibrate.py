@@ -284,17 +284,31 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
         ax, ay = (float(real[0]), float(real[1])) if real else (x, y)
         arm.move_to(x, y, travel_z)
         arm.home()
-        arm.wait(1.0)  # let the arm clear the view and the camera settle
-        frame = grab()
+        arm.wait(1.5)  # let the arm clear the view, the owner's hand leave, and the camera settle
         import detect as detect_mod
-        dets = [d for d in detector.detect(frame) if detect_mod.is_target(d, target_class)]
-        if not dets:
-            log.warning("point %d: no %s seen by the camera after the arm moved away - skipped "
-                        "(is this spot in the camera's view?)", k, what)
+        best = None
+        for attempt in range(4):
+            # Two looks 0.5 s apart must agree: a hand still in the shot (or moving block) is rejected.
+            frame = grab()
+            dets = [d for d in detector.detect(frame) if detect_mod.is_target(d, target_class)]
+            arm.wait(0.5)
+            frame2 = grab()
+            dets2 = [d for d in detector.detect(frame2) if detect_mod.is_target(d, target_class)]
+            if dets and dets2:
+                b1, b2 = max(dets, key=lambda d: d.conf), max(dets2, key=lambda d: d.conf)
+                if math.hypot(b1.cx - b2.cx, b1.cy - b2.cy) <= 15:
+                    best = b2
+                    dets = dets2
+                    frame = frame2
+                    break
+            log.warning("point %d: block not seen steadily (attempt %d) - keep hands out of the picture", k, attempt + 1)
+            arm.wait(1.0)
+        if best is None:
+            log.warning("point %d: no %s seen steadily by the camera after the arm moved away - skipped "
+                        "(is this spot in the camera's view? hands out?)", k, what)
             if show:
                 show(frame, [], None)
             continue
-        best = max(dets, key=lambda d: d.conf)
         pixel_pts.append((best.cx, best.cy))
         arm_pts.append((ax, ay))
         log.info("pair %d: pixel=(%.0f,%.0f) arm=(%.1f,%.1f) conf=%.2f", len(pixel_pts), best.cx, best.cy, ax, ay, best.conf)
