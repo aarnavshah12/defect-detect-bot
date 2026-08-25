@@ -48,6 +48,7 @@ class PickLoop:
         self.picks = 0
         self.table_z = config.require("TABLE_Z_MM")
         self.hover = config.HOVER_OFFSET_MM
+        self.travel_z = config.TRAVEL_Z_MM
         self.drop = config.require("DROP_XYZ_MM")
 
     # -- helpers ----------------------------------------------------------------
@@ -122,26 +123,32 @@ class PickLoop:
 
         a = self.arm
         hover_z = self.table_z + self.hover
+        tz = self.travel_z
         dx, dy, dz = self.drop
         at_drop = False
         try:
+            # Sideways moves only at travel height; vertical moves only above the spot.
+            a.move_to(x, y, tz)
             a.move_to(x, y, hover_z)
             a.move_to(x, y, self.table_z)
             a.suction(True)
             a.wait(config.SUCTION_ON_PAUSE_S)
             a.move_to(x, y, hover_z)
+            a.move_to(x, y, tz)
             at_drop = True
-            a.move_to(dx, dy, dz + self.hover)   # clear of the pick spot before checking the lift
+            a.move_to(dx, dy, tz)                # clear of the pick spot before checking the lift
             if not self.dry_run and self._lift_failed(target):
                 self.log.warning("lift failed at %s; releasing, ignoring this spot for the session", target)
                 a.suction(False)
                 self.ignored.append(spot)
                 a.home()
                 return "skipped"
+            a.move_to(dx, dy, dz + self.hover)
             a.move_to(dx, dy, dz)
             a.suction(False)
             a.wait(config.SUCTION_OFF_PAUSE_S)
             a.move_to(dx, dy, dz + self.hover)
+            a.move_to(dx, dy, tz)
             a.home()
         except arm_mod.MoveRefused as e:
             # The arm did not reach a target (silently refused by its IK, or stalled). Never continue
@@ -180,12 +187,15 @@ def check_fixed_targets() -> None:
     Otherwise a bad DROP_XYZ_MM is only discovered mid-cycle, with a block on the cup.
     """
     hover = config.HOVER_OFFSET_MM
+    tz = config.TRAVEL_Z_MM
     dx, dy, dz = config.require("DROP_XYZ_MM")
     hx, hy, hz = config.require("HOME_XYZ_MM")
     table_z = config.require("TABLE_Z_MM")
     log = runlog.get_logger()
+    if tz < table_z + hover + 40.0:
+        raise SystemExit(f"config.TRAVEL_Z_MM={tz} is too low: needs >= TABLE_Z + HOVER + 40 mm block = {table_z + hover + 40:.0f}")
     for name, p in (("HOME_XYZ_MM", (hx, hy, hz)), ("DROP_XYZ_MM", (dx, dy, dz)),
-                    ("drop hover", (dx, dy, dz + hover))):
+                    ("drop hover", (dx, dy, dz + hover)), ("drop travel", (dx, dy, tz))):
         ext = arm_mod.extension_ratio(*p)
         if ext > arm_mod.EXTENSION_WARN:
             log.warning("%s %s needs %.0f%% of the arm's full stretch; the firmware may refuse it - "
@@ -194,7 +204,10 @@ def check_fixed_targets() -> None:
         arm_mod.check_target(hx, hy, hz)
         arm_mod.check_target(dx, dy, dz)
         arm_mod.check_target(dx, dy, dz + hover)
+        arm_mod.check_target(dx, dy, tz)
         lo, hi = config.require("REACH_Z_MM")
+        if not lo <= tz <= hi:
+            raise arm_mod.UnsafeTarget(f"travel Z {tz:.1f} outside reach Z [{lo}, {hi}]")
         if not lo <= table_z + hover <= hi:
             raise arm_mod.UnsafeTarget(f"pick hover Z {table_z + hover:.1f} outside reach Z [{lo}, {hi}]")
     except arm_mod.UnsafeTarget as e:

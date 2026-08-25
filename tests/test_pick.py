@@ -55,6 +55,7 @@ class FakeArm:
 def _setup():
     config.TARGET_CLASS = "red"  # tests are written around red blocks regardless of the owner's default
     config.TABLE_Z_MM = 60.0
+    config.TRAVEL_Z_MM = 160.0
     config.DROP_XYZ_MM = (150.0, -150.0, 70.0)
     config.HOME_XYZ_MM = (0.0, -160.0, 210.0)
     config.REACH_X_MM = (-200.0, 200.0)
@@ -84,10 +85,18 @@ def test_picks_highest_conf_red_then_stops():
     loop = pick.PickLoop(det, arm, frame, H, dry_run=False, max_cycles=10)
     assert loop.run() == 2
     moves = [c for c in arm.calls if c[0] == "move"]
-    assert moves[0] == ("move", 60, -250, 100)   # hover over red_b first (highest conf)
-    assert moves[1] == ("move", 60, -250, 60)    # descend to table Z
+    assert moves[0] == ("move", 60, -250, 160)   # travel over red_b first (highest conf)
+    assert moves[1] == ("move", 60, -250, 100)   # hover
+    assert moves[2] == ("move", 60, -250, 60)    # descend to table Z
     assert ("suction", True) in arm.calls and ("suction", False) in arm.calls
-    assert moves[3] == ("move", 150, -150, 110)  # drop hover
+    assert moves[3:6] == [("move", 60, -250, 100), ("move", 60, -250, 160), ("move", 150, -150, 160)]  # lift, travel
+    assert moves[6] == ("move", 150, -150, 110)  # drop hover
+    # every sideways move happens at travel height
+    prev = None
+    for m in moves:
+        if prev is not None and (m[1], m[2]) != (prev[1], prev[2]):
+            assert m[3] == 160 and prev[3] == 160, f"sideways move below travel height: {prev} -> {m}"
+        prev = m
     assert det.calls == 5
 
 
@@ -100,7 +109,7 @@ def test_out_of_reach_is_skipped_and_ignored():
     loop = pick.PickLoop(det, arm, frame, H, max_cycles=10)
     assert loop.run() == 1
     assert loop.ignored == [(1900, 50)]
-    assert not any(c == ("move", 235, -112, 100) for c in arm.calls)
+    assert not any(c[0] == "move" and c[1:3] == (235, -112) for c in arm.calls)
 
 
 def test_lift_failed_releases_and_ignores():
@@ -150,14 +159,14 @@ def test_move_refused_at_pick_releases_ignores_and_continues():
     assert loop.run() == 0
     assert loop.ignored == [(800, 500)]
     assert ("suction", False) in arm.calls and arm.calls[-1] == ("home",)
-    assert ("move", 150, -150, 110) not in arm.calls  # never carried on to the drop zone
+    assert not any(c[0] == "move" and c[1:3] == (150, -150) for c in arm.calls)  # never carried on to the drop zone
 
 
 def test_move_refused_at_drop_aborts_run():
     H = _setup()
     red = Detection("red", 0.9, 800, 500, 90, 90)
     det = FakeDetector([[red]])
-    arm = FakeArm(refuse={(150, -150, 110)})  # drop hover unreachable for the arm's IK
+    arm = FakeArm(refuse={(150, -150, 160)})  # drop travel pose unreachable for the arm's IK
     loop = pick.PickLoop(det, arm, frame, H, max_cycles=10)
     try:
         loop.run()

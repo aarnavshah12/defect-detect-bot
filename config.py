@@ -58,8 +58,11 @@ MOVE_MS = 1000
 
 # Owner-provided (jogged 2026-08-25): arm Z (mm) where the suction cup just touches the table.
 TABLE_Z_MM: float | None = 47.0  # measured with arm.py --jog, 2026-08-25
-# Hover height above table / drop zone (mm).
+# Hover height above table / drop zone (mm): the slow, vertical final approach.
 HOVER_OFFSET_MM = 40.0
+# ALL sideways travel happens at this absolute Z (mm). Must clear a 40 mm block on the table while the
+# cup is carrying another 40 mm block: table Z + 40 + 40 + margin. Owner can raise it if blocks are taller.
+TRAVEL_Z_MM = 160.0
 # Owner-provided: drop zone end-effector position (mm).
 DROP_XYZ_MM: tuple[float, float, float] | None = (-220.0, 13.0, 120.0)  # verified reachable incl. hover, 2026-08-25
 # Owner-provided: home pose, out of camera view, clear of the pick area (mm).

@@ -214,7 +214,10 @@ def verify(camera: int, path: str) -> None:
             if key == ord("q"):
                 break
             if key == ord("h"):
+                if last is not None:
+                    a.move_to(*mapping.pixel_to_arm(last[0], last[1], H), config.TRAVEL_Z_MM)
                 a.home()
+                last = None
                 continue
             if key == ord("b"):
                 if dets:
@@ -227,10 +230,13 @@ def verify(camera: int, path: str) -> None:
                 px, py = clicks.get_nowait()
             except queue.Empty:
                 continue
-            last = (px, py)
             x, y = mapping.pixel_to_arm(px, py, H)
             log.info("verify pixel=(%.0f,%.0f) -> arm=(%.1f,%.1f) hover z=%.1f", px, py, x, y, hover_z)
             try:
+                if last is not None:  # rise straight up from the previous spot before moving sideways
+                    a.move_to(*mapping.pixel_to_arm(last[0], last[1], H), config.TRAVEL_Z_MM)
+                last = (px, py)
+                a.move_to(x, y, config.TRAVEL_Z_MM)
                 a.move_to(x, y, hover_z)
             except (arm_mod.UnsafeTarget, arm_mod.MoveRefused) as e:
                 log.warning("refused: %s", e)
@@ -262,7 +268,7 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
     """
     pixel_pts, arm_pts = [], []
     present_z = table_z + PRESENT_CLEARANCE_MM
-    travel_z = present_z + 50.0
+    travel_z = max(config.TRAVEL_Z_MM, present_z + 30.0)
     for k, (x, y) in enumerate(points, 1):
         try:
             arm.move_to(x, y, travel_z)
