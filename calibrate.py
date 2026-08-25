@@ -271,7 +271,8 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
             log.warning("point %d (%.0f, %.0f) not reachable (%s) - skipped", k, x, y, e)
             arm.home()
             continue
-        answer = ask(f"Point {k}/{len(points)}: slide the {target_class} block under the cup (centred under it), "
+        what = "block" if target_class == "any" else f"{target_class} block"
+        answer = ask(f"Point {k}/{len(points)}: slide the {what} under the cup (centred under it), "
                      f"then press Enter (s = skip, q = stop): ").strip().lower()
         if answer == "q":
             arm.home()
@@ -285,10 +286,11 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
         arm.home()
         arm.wait(1.0)  # let the arm clear the view and the camera settle
         frame = grab()
-        dets = [d for d in detector.detect(frame) if d.cls == target_class]
+        import detect as detect_mod
+        dets = [d for d in detector.detect(frame) if detect_mod.is_target(d, target_class)]
         if not dets:
-            log.warning("point %d: no %s block seen by the camera after the arm moved away - skipped "
-                        "(is this spot in the camera's view?)", k, target_class)
+            log.warning("point %d: no %s seen by the camera after the arm moved away - skipped "
+                        "(is this spot in the camera's view?)", k, what)
             if show:
                 show(frame, [], None)
             continue
@@ -337,7 +339,9 @@ def auto(camera: int, out_path: str) -> None:
         return f
 
     show(grab(), [], None)
-    print(f"Auto calibration: {len(AUTO_GRID)} spots. Keep ONLY ONE {config.TARGET_CLASS} block on the table. "
+    what = "block" if config.TARGET_CLASS == "any" else f"{config.TARGET_CLASS} block"
+    print(f"Auto calibration: {len(AUTO_GRID)} spots. Keep ONLY ONE {what} on the table (and nothing else "
+          f"block-sized in view). "
           f"The arm will stop above each spot; slide the block under the cup and press Enter.")
     a = arm_mod.Arm().connect()
     try:

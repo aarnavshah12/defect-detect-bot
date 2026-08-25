@@ -168,6 +168,15 @@ def test_move_refused_at_drop_aborts_run():
     assert loop.picks == 0 and ("suction", False) in arm.calls and loop.ignored == [(800, 500)]
 
 
+def test_any_class_picks_block_sized_detection_of_any_colour():
+    H = _setup()
+    yellow = Detection("yellow", 0.4, 800, 500, 90, 90)  # the blue block, mislabelled
+    det = FakeDetector([[yellow], [], []])
+    arm = FakeArm()
+    loop = pick.PickLoop(det, arm, frame, H, target_class="any", max_cycles=10)
+    assert loop.run() == 1
+
+
 def test_fixed_targets_validated_before_any_motion():
     _setup()
     pick.check_fixed_targets()  # fine

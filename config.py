@@ -20,8 +20,14 @@ import os
 MODEL_ID = "aarnavs-space/blocks-lllea-p7f2h-1-rfdetr-small-t1"
 API_KEY_ENV = "ROBOFLOW_API_KEY"
 # Exact class string as it appears on the dashboard (classes: blue, green, red, yellow).
-# Owner switched the target from "red" to "blue" on 2026-08-25. `pick.py --class X` overrides.
-TARGET_CLASS = "blue"
+# Owner switched the target from "red" to "blue" on 2026-08-25, then to "any" because the placeholder
+# model mislabels colours (the blue block reads as "yellow"); "any" = any block-sized detection.
+# `pick.py --class blue` overrides once a better model is in.
+TARGET_CLASS = "any"
+# Plausible block size in pixels (4 cm blocks are ~120-190 px in the mounted view). Detections outside
+# this range are dropped: the model also boxes hands, the laptop and the mat as "blue".
+MIN_BOX_PX = 50
+MAX_BOX_PX = 320
 CONFIDENCE = 0.5  # minimum detection confidence
 # Optional pick-area region of interest (x, y, w, h) in FULL-FRAME pixels. Detection runs on
 # this crop and centres are mapped back to full-frame pixels, so calibration is unaffected.

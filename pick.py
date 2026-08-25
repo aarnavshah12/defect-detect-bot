@@ -59,7 +59,7 @@ class PickLoop:
         for d in dets:
             x, y = mapping.pixel_to_arm(d.cx, d.cy, self.H)
             self.log.info("det %s %s -> arm=(%.1f, %.1f)", tag, d, x, y)
-        n = sum(d.cls == self.target_class for d in dets)
+        n = sum(detect.is_target(d, self.target_class) for d in dets)
         self.log.info("%s: %d detections, %d %s", tag, len(dets), n, self.target_class)
 
     def _annotate(self, frame, dets, target: detect.Detection | None, x: float | None, y: float | None):
@@ -81,7 +81,7 @@ class PickLoop:
         dets = self.det.detect(frame)
         self._log_detections(dets, "lift-check")
         for d in dets:
-            if d.cls == self.target_class and _dist((d.cx, d.cy), (target.cx, target.cy)) <= config.LIFT_FAIL_RADIUS_PX:
+            if detect.is_target(d, self.target_class) and _dist((d.cx, d.cy), (target.cx, target.cy)) <= config.LIFT_FAIL_RADIUS_PX:
                 runlog.save_frame(self._annotate(frame, dets, d, *mapping.pixel_to_arm(d.cx, d.cy, self.H)),
                                   f"pick{self.picks + 1:03d}-liftfail")
                 return True
@@ -93,7 +93,7 @@ class PickLoop:
         frame = self.grab()
         dets = self.det.detect(frame)
         self._log_detections(dets, f"cycle{n}")
-        candidates = [d for d in dets if d.cls == self.target_class and not self._is_ignored(d)]
+        candidates = [d for d in dets if detect.is_target(d, self.target_class) and not self._is_ignored(d)]
         if not candidates:
             self.log.info("no %s left to pick (%d ignored spots, %d planned) -> done",
                           self.target_class, len(self.ignored), len(self.planned))
@@ -223,7 +223,7 @@ def main() -> None:
     det = detect.Detector(confidence=args.conf)
     log.info("model=%s classes=%s target=%r dry_run=%s once=%s", det.model_id, det.class_names,
              args.target_class, args.dry_run, args.once)
-    if args.target_class not in det.class_names:
+    if args.target_class != "any" and args.target_class not in det.class_names:
         raise SystemExit(f"class {args.target_class!r} is not one of the model's classes {det.class_names}")
 
     camera = config.WEBCAM_INDEX if args.camera is None else args.camera

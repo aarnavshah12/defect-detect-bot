@@ -76,7 +76,19 @@ class Detector:
                       float(p.width), float(p.height))
             for p in result.predictions
         ]
-        return dedupe(dets)
+        return dedupe(block_sized(dets))
+
+
+def block_sized(dets: list[Detection]) -> list[Detection]:
+    """Drop detections whose box is not plausibly a block (hands, laptop, mat...)."""
+    return [d for d in dets
+            if config.MIN_BOX_PX <= d.w <= config.MAX_BOX_PX and config.MIN_BOX_PX <= d.h <= config.MAX_BOX_PX]
+
+
+def is_target(d: Detection, target_class: str | None = None) -> bool:
+    """True if d is a pickable target: its class matches, or target_class is "any"."""
+    target_class = target_class or config.TARGET_CLASS
+    return target_class == "any" or d.cls == target_class
 
 
 def iou(a: Detection, b: Detection) -> float:
@@ -114,7 +126,7 @@ def draw(frame: np.ndarray, dets: list[Detection], target_class: str | None = No
         cv2.rectangle(out, (x, y), (x + w, y + h), (255, 255, 255), 1)
     for d in dets:
         colour = _COLOURS.get(d.cls, (200, 200, 200))
-        thick = 3 if d.cls == target_class else 1
+        thick = 3 if is_target(d, target_class) else 1
         x1, y1, x2, y2 = d.bbox
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, thick)
         cv2.circle(out, (int(d.cx), int(d.cy)), 4, colour, -1)
@@ -171,13 +183,13 @@ def main() -> None:
     det = Detector(confidence=args.conf, roi=roi)
     log.info("model=%s classes=%s load=%.1fs roi=%s conf=%.2f", det.model_id, det.class_names,
              det.load_seconds, roi, det.confidence)
-    if config.TARGET_CLASS not in det.class_names:
+    if config.TARGET_CLASS != "any" and config.TARGET_CLASS not in det.class_names:
         log.warning("target class %r not in model classes %s", config.TARGET_CLASS, det.class_names)
 
     def report(dets: list[Detection], frame_tag: str) -> None:
         for d in dets:
             log.info("det %s %s", frame_tag, d)
-        n_target = sum(d.cls == config.TARGET_CLASS for d in dets)
+        n_target = sum(is_target(d) for d in dets)
         log.info("%s: %d detections, %d %s", frame_tag, len(dets), n_target, config.TARGET_CLASS)
 
     if args.image:
