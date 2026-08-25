@@ -213,6 +213,56 @@ def test_home_rises_first():
         _restore(saved)
 
 
+def _xyz_frames(a):
+    return [struct.unpack("<hhhH", f[4:12])[:3] for f in a._ser.written if f[2] == arm.FUNC_SET_XYZ]
+
+
+def test_rise_fails_closed_without_readback():
+    saved = _set_envelope()
+    config.TRAVEL_Z_MM = 160.0
+    try:
+        a = _fake_arm(silent=True)
+        try:
+            a.home()
+        except arm.MoveRefused:
+            pass
+        else:
+            raise AssertionError("expected MoveRefused")
+        assert _xyz_frames(a) == []  # nothing sent: no sideways sweep from an unknown height
+    finally:
+        _restore(saved)
+
+
+def test_rise_clamps_noisy_readback_into_envelope():
+    saved = _set_envelope()
+    config.TRAVEL_Z_MM = 160.0
+    try:
+        a = _fake_arm()
+        a._ser.pos = (int(config.REACH_X_MM[0]) - 2, -200, 60)  # read-back 2 mm outside the box
+        a.home()
+        sent = _xyz_frames(a)
+        assert sent[0] == (int(config.REACH_X_MM[0]), -200, 160) and sent[1] == (0, -160, 150)
+    finally:
+        _restore(saved)
+
+
+def test_rise_refused_blocks_home():
+    saved = _set_envelope()
+    config.TRAVEL_Z_MM = 160.0
+    try:
+        a = _fake_arm(refuse={(0, -200, 160)})
+        a._ser.pos = (0, -200, 60)
+        try:
+            a.home()
+        except arm.MoveRefused:
+            pass
+        else:
+            raise AssertionError("expected MoveRefused")
+        assert _xyz_frames(a) == [(0, -200, 160)]  # only the rise was attempted, never the HOME move
+    finally:
+        _restore(saved)
+
+
 def test_move_duration_bounds_refused_before_sending():
     saved = _set_envelope()
     try:

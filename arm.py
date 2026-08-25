@@ -364,16 +364,25 @@ class Arm:
         return pos
 
     def rise(self) -> None:
-        """Go straight up to config.TRAVEL_Z_MM from wherever the arm actually is (no-op if already there)."""
+        """Go straight up to config.TRAVEL_Z_MM from wherever the arm actually is (no-op if already there).
+
+        Fails closed: without a trustworthy position read-back, or if the rise is refused, it raises so
+        home() never sweeps sideways from a low height.
+        """
         if self.dry_run:
             return
         pos = self.read_xyz()
-        if pos is None or pos[2] >= config.TRAVEL_Z_MM - 5:
+        if pos is None:
+            pos = self.read_xyz()  # one retry, as in move_to(): a single dropped reply is not an error
+        if pos is None:
+            raise MoveRefused("cannot rise to travel height: no position read-back; refusing to move sideways")
+        if pos[2] >= config.TRAVEL_Z_MM - 5:
             return
-        try:
-            self.move_to(pos[0], pos[1], config.TRAVEL_Z_MM, 800)
-        except (UnsafeTarget, MoveRefused) as e:
-            self.log.warning("arm: could not rise to travel height from %s (%s); moving anyway", pos, e)
+        # Read-back is ~8 mm noisy; the arm is physically inside the envelope, so clamp (x, y) into REACH_*
+        # rather than let check_target refuse a purely vertical move.
+        (xlo, xhi), (ylo, yhi) = config.require("REACH_X_MM"), config.require("REACH_Y_MM")
+        x, y = min(max(pos[0], xlo), xhi), min(max(pos[1], ylo), yhi)
+        self.move_to(x, y, config.TRAVEL_Z_MM, 800)  # UnsafeTarget / MoveRefused propagate
 
     def home(self, ms: int = 1500) -> tuple[int, int, int] | None:
         """Rise to travel height first, then go to config.HOME_XYZ_MM."""

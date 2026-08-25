@@ -127,12 +127,14 @@ class PickLoop:
         tz = self.travel_z
         dx, dy, dz = self.drop
         at_drop = False
+        carrying = False
         try:
             # Sideways moves only at travel height; vertical moves only above the spot.
             a.move_to(x, y, tz)
             a.move_to(x, y, hover_z)
             a.move_to(x, y, self.pick_z, 700)  # slow final descent onto the block
             a.suction(True)
+            carrying = True
             a.wait(config.SUCTION_ON_PAUSE_S)
             a.move_to(x, y, hover_z)
             a.move_to(x, y, tz)
@@ -153,8 +155,15 @@ class PickLoop:
             a.home()
         except arm_mod.MoveRefused as e:
             # The arm did not reach a target (silently refused by its IK, or stalled). Never continue
-            # the sequence blind: vent, park, and do not retry the same spot.
+            # the sequence blind: set the block down if we can, vent, park, and do not retry the spot.
             self.log.error("move refused (%s); releasing, homing, ignoring spot %s", e, spot)
+            if carrying and not self.dry_run:
+                pos = a.read_xyz()
+                if pos is not None and _dist(pos, (x, y)) <= arm_mod.POSITION_TOLERANCE_MM and pos[2] > self.pick_z + 5:
+                    try:  # still in the pick column: lower the block back onto its spot instead of dropping it
+                        a.move_to(x, y, self.pick_z, 900)
+                    except (arm_mod.UnsafeTarget, arm_mod.MoveRefused) as e2:
+                        self.log.warning("could not lower the block before venting (%s); venting in place", e2)
             a.suction(False)
             self.ignored.append(spot)
             a.home()

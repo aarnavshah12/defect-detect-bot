@@ -41,6 +41,12 @@ class FakeArm:
         self.calls.append(("move",) + t)
         if t in self.refuse:
             raise arm_mod.MoveRefused(f"{t} refused")
+        self.pos = t
+
+    pos = (0, -160, 210)
+
+    def read_xyz(self):
+        return self.pos
 
     def suction(self, on):
         self.calls.append(("suction", on))
@@ -165,6 +171,19 @@ def test_move_refused_at_pick_releases_ignores_and_continues():
     assert loop.ignored == [(800, 500)]
     assert ("suction", False) in arm.calls and arm.calls[-1] == ("home",)
     assert not any(c[0] == "move" and c[1:3] == (150, -150) for c in arm.calls)  # never carried on to the drop zone
+
+
+def test_move_refused_mid_carry_sets_block_down_before_venting():
+    H = _setup()
+    red = Detection("red", 0.9, 800, 500, 90, 90)  # -> (-40, -225)
+    det = FakeDetector([[red]])
+    arm = FakeArm(refuse={(-40, -225, 160)})  # the rise to travel height with the block is refused
+    loop = pick.PickLoop(det, arm, frame, H, max_cycles=10)
+    assert loop.run() == 0
+    i_on = arm.calls.index(("suction", True))
+    i_off = arm.calls.index(("suction", False))
+    assert ("move", -40, -225, 60) in arm.calls[i_on:i_off]  # lowered back onto the spot before venting
+    assert loop.ignored == [(800, 500)]
 
 
 def test_move_refused_at_drop_aborts_run():
