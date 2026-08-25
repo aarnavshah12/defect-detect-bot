@@ -54,7 +54,7 @@ TABLE_Z_MM: float | None = 47.0  # measured with arm.py --jog, 2026-08-25
 # Hover height above table / drop zone (mm).
 HOVER_OFFSET_MM = 40.0
 # Owner-provided: drop zone end-effector position (mm).
-DROP_XYZ_MM: tuple[float, float, float] | None = (-266.0, 13.0, 153.0)
+DROP_XYZ_MM: tuple[float, float, float] | None = (-220.0, 13.0, 120.0)  # verified reachable incl. hover, 2026-08-25
 # Owner-provided: home pose, out of camera view, clear of the pick area (mm).
 HOME_XYZ_MM: tuple[float, float, float] | None = (-210.0, -56.0, 139.0)
 # Owner-provided: reach limits the arm may be sent to, (min, max) per axis in mm (envelope visited in --jog).
