@@ -171,6 +171,23 @@ def check_bootstrap(x: float, y: float, z: float) -> None:
         raise UnsafeTarget(f"z={z:.0f} outside bootstrap envelope {BOOTSTRAP_Z_MM}")
 
 
+# Link lengths from Hiwonder's ESPMax library (_espmax.h): base height L0, shoulder offset L1, upper arm
+# L2, forearm L3, cup offset L4. Home ORIGIN = (0, -(L1+L3+L4), L0+L2) confirms the geometry.
+L0, L1, L2, L3, L4 = 84.4, 8.14, 128.4, 138.0, 16.8
+EXTENSION_WARN = 0.90  # above this fraction of full stretch the firmware's IK usually refuses
+
+
+def extension_ratio(x: float, y: float, z: float) -> float:
+    """Fraction of the arm's full stretch needed for (x, y, z): ~0.9+ is at the edge of reach.
+
+    Advisory only (the firmware's IK is the authority); planar 2-link model from the documented link
+    lengths, ignoring servo travel limits, so real reach is a little smaller than 1.0.
+    """
+    d = math.hypot(x, y) - L1 - L4  # horizontal distance from the shoulder to the cup
+    h = z - L0                      # height of the cup above the shoulder
+    return math.hypot(d, h) / (L2 + L3)
+
+
 def check_target(x: float, y: float, z: float) -> None:
     """Raise UnsafeTarget unless (x, y, z) is inside reach limits and z >= table Z."""
     table_z = config.require("TABLE_Z_MM")
@@ -337,9 +354,12 @@ class Arm:
             pos = self.read_xyz()  # one retry: a single dropped reply is not a refused move
         err = None if pos is None else max(abs(pos[0] - x), abs(pos[1] - y), abs(pos[2] - z))
         if pos is None or err > POSITION_TOLERANCE_MM:
+            ext = extension_ratio(x, y, z)
             self.log.error("arm: target (%.1f, %.1f, %.1f) NOT reached: read-back %s (err %s mm) after %.2fs "
-                           "-> treating as refused", x, y, z, pos, err, time.time() - t0)
-            raise MoveRefused(f"target ({x:.0f}, {y:.0f}, {z:.0f}) not reached; read-back {pos}")
+                           "-> treating as refused (needs %.0f%% of full stretch)", x, y, z, pos, err,
+                           time.time() - t0, ext * 100)
+            raise MoveRefused(f"target ({x:.0f}, {y:.0f}, {z:.0f}) not reached; read-back {pos}; "
+                              f"it needs {ext * 100:.0f}% of the arm's full stretch")
         self.log.info("arm: at %s after %.2fs (max axis error %.1f mm)", pos, time.time() - t0, err)
         return pos
 

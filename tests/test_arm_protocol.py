@@ -84,6 +84,16 @@ def test_safety_rejects_bad_targets():
         _restore(saved)
 
 
+def test_extension_ratio_matches_rig_observations():
+    # Home pose from the SDK is exactly the fully stretched horizontal forearm: L2 up, L3+L4 out.
+    home = (0, -(arm.L1 + arm.L3 + arm.L4), arm.L0 + arm.L2)
+    assert 0.7 < arm.extension_ratio(*home) < 0.75  # = L3 / (L2 + L3)
+    # Observed 2026-08-25: (-266, 13, 153) reached in the jog, (-266, 13, 193) refused by the firmware.
+    assert arm.extension_ratio(-266, 13, 153) < 0.95
+    assert arm.extension_ratio(-266, 13, 193) > 0.99
+    assert arm.extension_ratio(-210, -56, 139) < 0.8
+
+
 def test_bootstrap_envelope():
     arm.check_bootstrap(0, -160, 150)
     for bad in ((0, -20, 100), (0, -320, 100), (0, -160, 260), (0, -160, -1)):

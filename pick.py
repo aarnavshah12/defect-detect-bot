@@ -183,6 +183,13 @@ def check_fixed_targets() -> None:
     dx, dy, dz = config.require("DROP_XYZ_MM")
     hx, hy, hz = config.require("HOME_XYZ_MM")
     table_z = config.require("TABLE_Z_MM")
+    log = runlog.get_logger()
+    for name, p in (("HOME_XYZ_MM", (hx, hy, hz)), ("DROP_XYZ_MM", (dx, dy, dz)),
+                    ("drop hover", (dx, dy, dz + hover))):
+        ext = arm_mod.extension_ratio(*p)
+        if ext > arm_mod.EXTENSION_WARN:
+            log.warning("%s %s needs %.0f%% of the arm's full stretch; the firmware may refuse it - "
+                        "bring it closer to the base or lower it", name, p, ext * 100)
     try:
         arm_mod.check_target(hx, hy, hz)
         arm_mod.check_target(dx, dy, dz)
