@@ -177,7 +177,19 @@ def test_move_refused_mid_carry_sets_block_down_before_venting():
     H = _setup()
     red = Detection("red", 0.9, 800, 500, 90, 90)  # -> (-40, -225)
     det = FakeDetector([[red]])
-    arm = FakeArm(refuse={(-40, -225, 160)})  # the rise to travel height with the block is refused
+    class RefuseSecondVisit(FakeArm):
+        """Travel over the target succeeds; the rise back to travel height WITH the block is refused."""
+        seen = 0
+
+        def move_to(self, x, y, z, ms=None):
+            if (round(x), round(y), round(z)) == (-40, -225, 160):
+                self.seen += 1
+                if self.seen == 2:
+                    self.calls.append(("move", -40, -225, 160))
+                    raise arm_mod.MoveRefused("stalled with the block")
+            return super().move_to(x, y, z, ms)
+
+    arm = RefuseSecondVisit()
     loop = pick.PickLoop(det, arm, frame, H, max_cycles=10)
     assert loop.run() == 0
     i_on = arm.calls.index(("suction", True))
