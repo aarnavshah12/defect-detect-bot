@@ -4,6 +4,9 @@
                                  click snaps to the detected block's bbox centre - the same quantity
                                  pick.py maps), jog the arm's suction cup onto the mark, type the arm
                                  (x, y) mm in the terminal. Writes calibration.npy.
+  python calibrate.py --auto     EASIEST: the arm drives itself to a grid of spots; at each one you slide
+                                 the block under the cup and press Enter; the arm moves away and the
+                                 camera records the block. No jogging, no typing. Writes calibration.npy.
   python calibrate.py --verify   verify: click anywhere -> the arm hovers above that point at
                                  TABLE_Z + HOVER_OFFSET. Press b -> hover above the best-detected block's
                                  bbox centre. Moves the arm -> asks "Workspace clear?".
@@ -244,6 +247,127 @@ def verify(camera: int, path: str) -> None:
             a.close()
 
 
+# --auto grid in arm mm (in front of the base, comfortably inside reach). Points the arm refuses or the
+# camera cannot see are skipped; at least mapping.MIN_PAIRS (ideally RECOMMENDED_PAIRS) must succeed.
+AUTO_GRID = [(x, y) for y in (-100.0, -150.0, -200.0) for x in (-150.0, 0.0, 150.0)]
+PRESENT_CLEARANCE_MM = 50.0  # cup height above table Z while you slide the (40 mm) block under it
+
+
+def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: float, log, show=None):
+    """Core of --auto, with injectable I/O so it can be tested offline.
+
+    For each (x, y): move the cup to (x, y, table_z + PRESENT_CLEARANCE_MM), ask the owner to slide the block
+    under it and press Enter (or 's' to skip), read the arm's real x,y, send the arm home (out of the camera's
+    view), grab a fresh frame, take the best `target_class` detection as the pixel. Returns (pixel_pts, arm_pts).
+    """
+    pixel_pts, arm_pts = [], []
+    present_z = table_z + PRESENT_CLEARANCE_MM
+    travel_z = present_z + 50.0
+    for k, (x, y) in enumerate(points, 1):
+        try:
+            arm.move_to(x, y, travel_z)
+            arm.move_to(x, y, present_z)
+        except (arm_mod_unsafe(), arm_mod_refused()) as e:
+            log.warning("point %d (%.0f, %.0f) not reachable (%s) - skipped", k, x, y, e)
+            arm.home()
+            continue
+        answer = ask(f"Point {k}/{len(points)}: slide the {target_class} block under the cup (centred under it), "
+                     f"then press Enter (s = skip, q = stop): ").strip().lower()
+        if answer == "q":
+            arm.home()
+            break
+        if answer == "s":
+            arm.home()
+            continue
+        real = arm.read_xyz()
+        ax, ay = (float(real[0]), float(real[1])) if real else (x, y)
+        arm.move_to(x, y, travel_z)
+        arm.home()
+        arm.wait(1.0)  # let the arm clear the view and the camera settle
+        frame = grab()
+        dets = [d for d in detector.detect(frame) if d.cls == target_class]
+        if not dets:
+            log.warning("point %d: no %s block seen by the camera after the arm moved away - skipped "
+                        "(is this spot in the camera's view?)", k, target_class)
+            if show:
+                show(frame, [], None)
+            continue
+        best = max(dets, key=lambda d: d.conf)
+        pixel_pts.append((best.cx, best.cy))
+        arm_pts.append((ax, ay))
+        log.info("pair %d: pixel=(%.0f,%.0f) arm=(%.1f,%.1f) conf=%.2f", len(pixel_pts), best.cx, best.cy, ax, ay, best.conf)
+        if show:
+            show(frame, dets, best)
+    return pixel_pts, arm_pts
+
+
+def arm_mod_unsafe():
+    import arm as arm_mod
+    return arm_mod.UnsafeTarget
+
+
+def arm_mod_refused():
+    import arm as arm_mod
+    return arm_mod.MoveRefused
+
+
+def auto(camera: int, out_path: str) -> None:
+    import arm as arm_mod
+    import detect
+
+    log = runlog.start_run("calibrate-auto")
+    table_z = config.require("TABLE_Z_MM")
+    arm_mod.check_target(*config.require("HOME_XYZ_MM"))
+    det = detect.Detector(roi=None)
+    cap = detect.open_camera(camera)
+    frame_wh = None
+    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+
+    def show(frame, dets, best):
+        vis = detect.draw(frame, dets, roi=None)
+        if best is not None:
+            cv2.drawMarker(vis, (int(best.cx), int(best.cy)), (255, 255, 255), cv2.MARKER_CROSS, 30, 2)
+        cv2.imshow(WINDOW, vis)
+        cv2.waitKey(1)
+
+    def grab():
+        nonlocal frame_wh
+        f = detect.grab(cap)
+        frame_wh = (f.shape[1], f.shape[0])
+        return f
+
+    show(grab(), [], None)
+    print(f"Auto calibration: {len(AUTO_GRID)} spots. Keep ONLY ONE {config.TARGET_CLASS} block on the table. "
+          f"The arm will stop above each spot; slide the block under the cup and press Enter.")
+    a = arm_mod.Arm().connect()
+    try:
+        a.confirm_workspace_clear()
+        a.home()
+        pixel_pts, arm_pts = auto_collect(AUTO_GRID, a, grab, det, input, config.TARGET_CLASS, table_z, log, show)
+    finally:
+        try:
+            a.home()
+        finally:
+            a.close()
+            cap.release()
+            cv2.destroyAllWindows()
+    print(f"\n{len(pixel_pts)} usable points.")
+    if len(pixel_pts) < mapping.MIN_PAIRS:
+        raise SystemExit(f"need at least {mapping.MIN_PAIRS}; move the camera so it sees more of the arm's "
+                         f"workspace, or run again.")
+    try:
+        H, _ = mapping.fit_homography(pixel_pts, arm_pts)
+    except ValueError as e:
+        raise SystemExit(f"cannot fit: {e}")
+    mapping.save_calibration(H, pixel_pts, arm_pts, path=out_path, frame_size=frame_wh)
+    log.info("saved %s pairs=%d frame=%s", out_path, len(pixel_pts), frame_wh)
+    print(f"Saved {out_path}")
+    for line in mapping.describe_residuals(pixel_pts, arm_pts):
+        print(line)
+    if len(pixel_pts) < mapping.RECOMMENDED_PAIRS:
+        print(f"Only {len(pixel_pts)} points: no typo check possible. Fine if --verify looks good.")
+
+
 def check(path: str) -> None:
     data = mapping.load_calibration(path)
     H = data["H"]
@@ -260,6 +384,7 @@ def check(path: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--auto", action="store_true", help="arm-driven calibration (easiest)")
     ap.add_argument("--verify", action="store_true")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--no-snap", action="store_true", help="collect: use raw clicks, do not snap to detected blocks")
@@ -270,6 +395,8 @@ def main() -> None:
     camera = config.WEBCAM_INDEX if args.camera is None else args.camera
     if args.check:
         check(args.out)
+    elif args.auto:
+        auto(camera, args.out)
     elif args.verify:
         verify(camera, args.out)
     else:
