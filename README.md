@@ -24,11 +24,14 @@ scripts refuse to move the arm until it is filled in.
 2. **Detection standalone** — mount the camera, then `python detect.py`. Gate: `red` boxes on real red
    blocks, none on the mat. If small blocks are mislabelled, set `PICK_ROI` in `config.py` to the pick
    area (see `PROGRESS.md`) and re-check. `python detect.py --image frame.jpg` tests a saved frame.
-3. **Calibration** (owner runs it) — 4–6 tape marks spread over the pick area. `python calibrate.py`:
-   click a mark, jog the arm to it (`python arm.py --jog` or the Hiwonder app), type its arm `x,y`.
-   Writes `calibration.npy`. Then `python calibrate.py --verify`: click anywhere, the arm hovers there.
-   Gate: within ~5 mm on 3+ spots, one near the edge. `python calibrate.py --check` prints residuals.
-   Move the camera → recalibrate.
+3. **Calibration** (owner runs it) — 5–6 tape marks spread over the pick area (not in a line, one near
+   the edge). Put a block on a mark, `python calibrate.py`, click the block (the click snaps to the
+   detected block's centre — the same point the pick loop uses, so block height is accounted for), jog the
+   suction cup onto the mark (`python arm.py --jog` or the Hiwonder app), type its arm `x,y`. Repeat per
+   mark, `d` to fit. It prints leave-one-out errors per mark and names the suspect mark if one value was mistyped.
+   Writes `calibration.npy`. Then `python calibrate.py --verify`: click anywhere (or `b` for the best
+   detected block) and the arm hovers there. Gate: within ~5 mm on 3+ spots, one near the edge.
+   `python calibrate.py --check` re-prints the residuals. Move the camera → recalibrate.
 4. **Dry-run pick loop** — `python pick.py --dry-run`. Prints and draws a target for each visible red
    block; reports "no red" on a clear table. Gate: owner eyeballs the drawn targets against the blocks.
 5. **Real pick loop** — `python pick.py --once`, then `python pick.py`. Gate: three consecutive
@@ -36,7 +39,8 @@ scripts refuse to move the arm until it is filled in.
 
 ## Safety
 
-- `arm.py` refuses any target outside `REACH_*_MM` or below `TABLE_Z_MM` (raises, never sends).
+- `arm.py` refuses any target outside `REACH_*_MM` or below `TABLE_Z_MM` (raises, never sends), and treats a
+  move whose position read-back is missing or off by > 10 mm as refused (vent, home, skip that block).
 - The first real motion of a process asks `Workspace clear? [y/N]`. No default yes.
 - **Never leave `pick.py` running unattended**, even with `--once`. Stay within reach of the power switch.
 - `--dry-run` never writes to the serial port.

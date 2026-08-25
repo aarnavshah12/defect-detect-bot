@@ -130,6 +130,10 @@ def open_camera(index: int | None = None) -> cv2.VideoCapture:
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
     if not cap.isOpened():
         raise RuntimeError(f"cannot open camera index {index}")
+    w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if (w, h) != (config.FRAME_WIDTH, config.FRAME_HEIGHT):
+        logging.getLogger("blockpicker").warning("camera %d negotiated %dx%d, config asks %dx%d",
+                                                 index, w, h, config.FRAME_WIDTH, config.FRAME_HEIGHT)
     return cap
 
 
@@ -192,8 +196,9 @@ def main() -> None:
             cv2.waitKey(0)
         return
 
-    cap = open_camera(args.camera)
-    log.info("camera %d opened %dx%d", args.camera, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+    camera = config.WEBCAM_INDEX if args.camera is None else args.camera
+    cap = open_camera(camera)
+    log.info("camera %d opened %dx%d", camera, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
              int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
     n = 0
     try:

@@ -44,7 +44,7 @@ FRAME_HEIGHT = 1080
 SERIAL_PORT = "/dev/cu.usbserial-3110"
 BAUDRATE = 9600  # MaxArm_micropython_microUSB firmware: UART(1, 9600, tx=1, rx=3); validated 2026-08-17
 SERIAL_TIMEOUT_S = 1.0
-MOVE_TIMEOUT_S = 6.0  # hard cap on how long we wait for any single motion
+MOVE_TIMEOUT_S = 6.0  # maximum allowed move duration (+ settle); longer moves are refused, never truncated
 
 # Default duration for a move (ms). Longer = gentler.
 MOVE_MS = 1000

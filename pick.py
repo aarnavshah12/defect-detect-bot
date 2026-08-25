@@ -1,6 +1,6 @@
 """Main pick loop: detect -> map -> pick -> drop -> home -> re-detect, until no target blocks remain.
 
-    python pick.py --dry-run          no serial writes; logs planned targets and draws them on the frame
+    python pick.py --dry-run          no serial writes; logs a planned target for each visible block once
     python pick.py --once             one real pick, then stop
     python pick.py                    loop until no `red` remain (owner must stay present)
     python pick.py --class blue       pick a different class (default config.TARGET_CLASS)
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import time
 
 import cv2
 
@@ -45,6 +44,7 @@ class PickLoop:
         self.show = show          # optional callback(frame_with_drawing)
         self.log = runlog.get_logger()
         self.ignored: list[tuple[float, float]] = []  # pixel spots skipped for the rest of the session
+        self.planned: list[tuple[float, float]] = []  # dry-run: spots already given a planned target
         self.picks = 0
         self.table_z = config.require("TABLE_Z_MM")
         self.hover = config.HOVER_OFFSET_MM
@@ -52,7 +52,8 @@ class PickLoop:
 
     # -- helpers ----------------------------------------------------------------
     def _is_ignored(self, d: detect.Detection) -> bool:
-        return any(_dist((d.cx, d.cy), spot) <= config.LIFT_FAIL_RADIUS_PX for spot in self.ignored)
+        return any(_dist((d.cx, d.cy), spot) <= config.LIFT_FAIL_RADIUS_PX
+                   for spot in self.ignored + self.planned)
 
     def _log_detections(self, dets, tag: str) -> None:
         for d in dets:
@@ -70,6 +71,8 @@ class PickLoop:
                         (255, 255, 255), 2)
         for spot in self.ignored:
             cv2.drawMarker(vis, (int(spot[0]), int(spot[1])), (0, 0, 0), cv2.MARKER_TILTED_CROSS, 20, 2)
+        for spot in self.planned:
+            cv2.drawMarker(vis, (int(spot[0]), int(spot[1])), (255, 255, 255), cv2.MARKER_SQUARE, 20, 1)
         return vis
 
     def _lift_failed(self, target: detect.Detection) -> bool:
@@ -92,7 +95,8 @@ class PickLoop:
         self._log_detections(dets, f"cycle{n}")
         candidates = [d for d in dets if d.cls == self.target_class and not self._is_ignored(d)]
         if not candidates:
-            self.log.info("no %s detected (%d ignored spots) -> done", self.target_class, len(self.ignored))
+            self.log.info("no %s left to pick (%d ignored spots, %d planned) -> done",
+                          self.target_class, len(self.ignored), len(self.planned))
             if self.show:
                 self.show(self._annotate(frame, dets, None, None, None))
             return "done"
@@ -111,31 +115,47 @@ class PickLoop:
             self.ignored.append((target.cx, target.cy))
             return "skipped"
 
+        spot = (target.cx, target.cy)
         if self.dry_run:
             self.log.info("[dry-run] would pick at (%.1f, %.1f, %.1f) and drop at %s", x, y, self.table_z, self.drop)
+            self.planned.append(spot)
 
         a = self.arm
         hover_z = self.table_z + self.hover
         dx, dy, dz = self.drop
-        a.move_to(x, y, hover_z)
-        a.move_to(x, y, self.table_z)
-        a.suction(True)
-        a.wait(config.SUCTION_ON_PAUSE_S)
-        a.move_to(x, y, hover_z)
-        a.move_to(dx, dy, dz + self.hover)   # clear of the pick spot before checking the lift
-        if not self.dry_run and self._lift_failed(target):
-            self.log.warning("lift failed at %s; releasing, ignoring this spot for the session", target)
+        at_drop = False
+        try:
+            a.move_to(x, y, hover_z)
+            a.move_to(x, y, self.table_z)
+            a.suction(True)
+            a.wait(config.SUCTION_ON_PAUSE_S)
+            a.move_to(x, y, hover_z)
+            at_drop = True
+            a.move_to(dx, dy, dz + self.hover)   # clear of the pick spot before checking the lift
+            if not self.dry_run and self._lift_failed(target):
+                self.log.warning("lift failed at %s; releasing, ignoring this spot for the session", target)
+                a.suction(False)
+                self.ignored.append(spot)
+                a.home()
+                return "skipped"
+            a.move_to(dx, dy, dz)
             a.suction(False)
-            self.ignored.append((target.cx, target.cy))
+            a.wait(config.SUCTION_OFF_PAUSE_S)
+            a.move_to(dx, dy, dz + self.hover)
             a.home()
+        except arm_mod.MoveRefused as e:
+            # The arm did not reach a target (silently refused by its IK, or stalled). Never continue
+            # the sequence blind: vent, park, and do not retry the same spot.
+            self.log.error("move refused (%s); releasing, homing, ignoring spot %s", e, spot)
+            a.suction(False)
+            self.ignored.append(spot)
+            a.home()
+            if at_drop:
+                raise arm_mod.ArmError(f"drop-zone pose {self.drop} (+hover) refused by the arm; "
+                                       f"fix config.DROP_XYZ_MM") from e
             return "skipped"
-        a.move_to(dx, dy, dz)
-        a.suction(False)
-        a.wait(config.SUCTION_OFF_PAUSE_S)
-        a.move_to(dx, dy, dz + self.hover)
-        a.home()
         self.picks += 1
-        self.log.info("pick %d complete", self.picks)
+        self.log.info("%s %d complete", "simulated pick" if self.dry_run else "pick", self.picks)
         return "picked"
 
     def run(self) -> int:
@@ -149,8 +169,29 @@ class PickLoop:
                 break
         else:
             self.log.warning("reached max cycles (%d); stopping", self.max_cycles)
-        self.log.info("finished: %d picks, %d ignored spots", self.picks, len(self.ignored))
+        self.log.info("finished: %d %s, %d ignored spots", self.picks,
+                      "simulated picks" if self.dry_run else "picks", len(self.ignored))
         return self.picks
+
+
+def check_fixed_targets() -> None:
+    """Validate home, drop, drop hover and pick hover against the reach envelope before anything moves.
+
+    Otherwise a bad DROP_XYZ_MM is only discovered mid-cycle, with a block on the cup.
+    """
+    hover = config.HOVER_OFFSET_MM
+    dx, dy, dz = config.require("DROP_XYZ_MM")
+    hx, hy, hz = config.require("HOME_XYZ_MM")
+    table_z = config.require("TABLE_Z_MM")
+    try:
+        arm_mod.check_target(hx, hy, hz)
+        arm_mod.check_target(dx, dy, dz)
+        arm_mod.check_target(dx, dy, dz + hover)
+        lo, hi = config.require("REACH_Z_MM")
+        if not lo <= table_z + hover <= hi:
+            raise arm_mod.UnsafeTarget(f"pick hover Z {table_z + hover:.1f} outside reach Z [{lo}, {hi}]")
+    except arm_mod.UnsafeTarget as e:
+        raise SystemExit(f"config.py HOME_XYZ_MM / DROP_XYZ_MM / TABLE_Z_MM+HOVER_OFFSET_MM outside REACH_*: {e}") from e
 
 
 def main() -> None:
@@ -169,14 +210,18 @@ def main() -> None:
     if missing:
         raise SystemExit(f"config.py still has owner-provided values unset: {missing}. "
                          f"Fill them in (block-picker-plan.md, 'Owner-provided values') before running pick.py.")
-    H = mapping.load_homography()  # raises CalibrationMissing with instructions if absent
+    check_fixed_targets()
+    cal = mapping.load_calibration()  # raises CalibrationMissing with instructions if absent
+    H = cal["H"]
     det = detect.Detector(confidence=args.conf)
     log.info("model=%s classes=%s target=%r dry_run=%s once=%s", det.model_id, det.class_names,
              args.target_class, args.dry_run, args.once)
     if args.target_class not in det.class_names:
         raise SystemExit(f"class {args.target_class!r} is not one of the model's classes {det.class_names}")
 
-    cap = detect.open_camera(args.camera)
+    camera = config.WEBCAM_INDEX if args.camera is None else args.camera
+    cap = detect.open_camera(camera)
+    mapping.check_frame_size(cal, detect.grab(cap))
     show = None
     if not args.no_window:
         def show(vis):
@@ -192,14 +237,17 @@ def main() -> None:
             cv2.waitKey(0)
     finally:
         try:
-            if not args.dry_run:
+            # Park only if motion was already authorised this session; never re-prompt from cleanup
+            # (the owner may have just declined or hit Ctrl-C at the prompt).
+            if not args.dry_run and a.cleared:
                 a.suction(False)
                 a.home()
-        except Exception as e:  # noqa: BLE001 - best-effort cleanup
-            log.error("cleanup: %s", e)
-        a.close()
-        cap.release()
-        cv2.destroyAllWindows()
+        except BaseException as e:  # noqa: BLE001 - a second Ctrl-C must still release the port
+            log.error("cleanup: %r", e)
+        finally:
+            a.close()
+            cap.release()
+            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

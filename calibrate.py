@@ -1,22 +1,27 @@
 """Click-to-calibrate the pixel -> arm homography, plus verify and check modes.
 
-  python calibrate.py            collect: click each tape mark on the live feed, jog the arm to it,
-                                 type the arm (x, y) mm in the terminal; writes calibration.npy
-  python calibrate.py --verify   verify: click anywhere; the arm hovers over that point at
-                                 TABLE_Z + HOVER_OFFSET (moves the arm -> asks "Workspace clear?")
-  python calibrate.py --check    offline: print the saved matrix, residuals and a few sample mappings
+  python calibrate.py            collect: put a BLOCK on each tape mark, click it on the live feed (the
+                                 click snaps to the detected block's bbox centre - the same quantity
+                                 pick.py maps), jog the arm's suction cup onto the mark, type the arm
+                                 (x, y) mm in the terminal. Writes calibration.npy.
+  python calibrate.py --verify   verify: click anywhere -> the arm hovers above that point at
+                                 TABLE_Z + HOVER_OFFSET. Press b -> hover above the best-detected block's
+                                 bbox centre. Moves the arm -> asks "Workspace clear?".
+  python calibrate.py --check    offline: matrix, leave-one-out residuals, sample mappings.
 
-Collect-mode keys (feed window): u = undo last pair, d = done (fit + save), q = quit without saving.
+Collect-mode keys (feed window): u = undo, d = done (fit + save), q = quit without saving.
 Terminal input after each click:  "x,y"  (arm mm)  |  u = discard this click  |  d = done  |  q = quit
+Use 5-6 marks spread over the whole pick area (not in a line, one near the edge). With only 4 the fit is
+exact and a typo cannot be detected.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import queue
 import sys
 import threading
-import time
 
 import cv2
 import numpy as np
@@ -26,6 +31,7 @@ import mapping
 import runlog
 
 WINDOW = "calibrate"
+SNAP_RADIUS_PX = 80.0  # a click within this distance of a detected block snaps to its bbox centre
 
 
 def _stdin_reader(q: "queue.Queue[str]") -> None:
@@ -33,8 +39,19 @@ def _stdin_reader(q: "queue.Queue[str]") -> None:
         q.put(line.strip())
 
 
-def _draw_pairs(frame, pixel_pts, arm_pts, pending):
-    vis = frame.copy()
+def _nearest_detection(dets, x: float, y: float):
+    best, best_d = None, SNAP_RADIUS_PX
+    for d in dets:
+        dist = math.hypot(d.cx - x, d.cy - y)
+        if dist <= best_d:
+            best, best_d = d, dist
+    return best
+
+
+def _draw_pairs(frame, pixel_pts, arm_pts, pending, dets):
+    import detect
+
+    vis = detect.draw(frame, dets, roi=None) if dets else frame.copy()
     for i, (p, a) in enumerate(zip(pixel_pts, arm_pts)):
         cv2.drawMarker(vis, (int(p[0]), int(p[1])), (0, 255, 0), cv2.MARKER_CROSS, 24, 2)
         cv2.putText(vis, f"{i + 1}: ({a[0]:.0f},{a[1]:.0f})", (int(p[0]) + 10, int(p[1]) - 10),
@@ -43,55 +60,74 @@ def _draw_pairs(frame, pixel_pts, arm_pts, pending):
         cv2.drawMarker(vis, (int(pending[0]), int(pending[1])), (0, 200, 255), cv2.MARKER_CROSS, 24, 2)
         cv2.putText(vis, "type arm x,y in terminal", (int(pending[0]) + 10, int(pending[1]) + 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
-    cv2.putText(vis, f"pairs: {len(pixel_pts)}  (need >=4)   u=undo d=done q=quit",
-                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    cv2.putText(vis, f"pairs: {len(pixel_pts)}  (need >={mapping.MIN_PAIRS}, use {mapping.RECOMMENDED_PAIRS}+)"
+                     f"   u=undo d=done q=quit", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
     return vis
 
 
-def collect(camera: int, out_path: str) -> None:
-    from detect import open_camera
+def collect(camera: int, out_path: str, snap: bool = True) -> None:
+    import detect
 
     log = runlog.start_run("calibrate")
-    cap = open_camera(camera)
+    det = detect.Detector(roi=None) if snap else None
+    cap = detect.open_camera(camera)
     pixel_pts: list[tuple[float, float]] = []
     arm_pts: list[tuple[float, float]] = []
     pending: list[tuple[float, float] | None] = [None]
+    latest: dict = {"dets": [], "frame_wh": (config.FRAME_WIDTH, config.FRAME_HEIGHT)}
 
     def on_mouse(event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN and pending[0] is None:
-            pending[0] = (float(x), float(y))
-            log.info("click pixel=(%d,%d)", x, y)
-            print(f"\nMark {len(pixel_pts) + 1} at pixel ({x}, {y}). Jog the arm so the suction cup touches "
-                  f"this mark, read the arm's (x, y) in mm, type it as `x,y` and press Enter "
-                  f"(u = discard click, d = done, q = quit): ", end="", flush=True)
+        if event != cv2.EVENT_LBUTTONDOWN or pending[0] is not None:
+            return
+        px, py = float(x), float(y)
+        snapped = _nearest_detection(latest["dets"], px, py) if snap else None
+        if snapped is not None:
+            px, py = snapped.cx, snapped.cy
+            log.info("click (%d,%d) snapped to %s bbox centre (%.0f,%.0f)", x, y, snapped.cls, px, py)
+            how = f"snapped to the detected {snapped.cls} block's centre ({px:.0f}, {py:.0f})"
+        else:
+            log.info("click pixel=(%d,%d) (no detection nearby; using the raw click)", x, y)
+            how = "no block detected near the click - using the raw click (put a block ON the mark for best accuracy)"
+        pending[0] = (px, py)
+        print(f"\nMark {len(pixel_pts) + 1}: {how}. Jog the suction cup onto this mark, read the arm's (x, y) mm, "
+              f"type it as `x,y` and press Enter (u = discard, d = done, q = quit): ", end="", flush=True)
 
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(WINDOW, on_mouse)
     q: "queue.Queue[str]" = queue.Queue()
     threading.Thread(target=_stdin_reader, args=(q,), daemon=True).start()
-    print("Click a tape mark on the feed. Spread 4-6 marks over the whole pick area, not in a line.")
+    print(f"Place a block on a tape mark and click it on the feed. Use {mapping.RECOMMENDED_PAIRS}-6 marks spread over "
+          f"the whole pick area, not in a line, one near the edge.")
 
     def finish() -> bool:
-        if len(pixel_pts) < 4:
-            print(f"\nNeed at least 4 pairs, have {len(pixel_pts)}.")
+        if len(pixel_pts) < mapping.MIN_PAIRS:
+            print(f"\nNeed at least {mapping.MIN_PAIRS} pairs, have {len(pixel_pts)}.")
             return False
-        H, res = mapping.fit_homography(pixel_pts, arm_pts)
-        mapping.save_calibration(H, pixel_pts, arm_pts, path=out_path)
-        log.info("saved %s", out_path)
+        try:
+            H, _ = mapping.fit_homography(pixel_pts, arm_pts)
+        except ValueError as e:
+            print(f"\nCannot fit: {e}. Undo the bad pair (u) or add marks.")
+            log.warning("fit refused: %s", e)
+            return False
+        mapping.save_calibration(H, pixel_pts, arm_pts, path=out_path, frame_size=latest["frame_wh"])
+        log.info("saved %s pairs=%d frame=%s", out_path, len(pixel_pts), latest["frame_wh"])
         print(f"\nSaved {out_path}\nH =\n{np.array2string(H, precision=5)}")
-        for i, r in enumerate(res):
-            print(f"  pair {i + 1}: pixel={pixel_pts[i]} arm={arm_pts[i]} residual={r:.2f} mm")
-        print(f"  max residual {res.max():.2f} mm, mean {res.mean():.2f} mm "
-              f"(>3 mm on a point usually means a mistyped value or a moved camera)")
+        for line in mapping.describe_residuals(pixel_pts, arm_pts):
+            print(line)
         return True
 
     try:
+        n = 0
         while True:
             ok, frame = cap.read()
             if not ok:
                 log.error("camera read failed")
                 break
-            cv2.imshow(WINDOW, _draw_pairs(frame, pixel_pts, arm_pts, pending[0]))
+            n += 1
+            latest["frame_wh"] = (frame.shape[1], frame.shape[0])
+            if det is not None and (n % 3 == 1) and pending[0] is None:
+                latest["dets"] = det.detect(frame)
+            cv2.imshow(WINDOW, _draw_pairs(frame, pixel_pts, arm_pts, pending[0], latest["dets"]))
             key = cv2.waitKey(30) & 0xFF
             cmd = None
             try:
@@ -130,33 +166,45 @@ def collect(camera: int, out_path: str) -> None:
 
 
 def verify(camera: int, path: str) -> None:
-    """Click on the feed; the arm hovers above that point. Gate: ~5 mm on 3+ spots incl. one near the edge."""
+    """Click on the feed (or press b for the best-detected block); the arm hovers above that point.
+
+    Gate: within ~5 mm on 3+ spots including one near the edge of the pick area.
+    """
     import arm as arm_mod
-    from detect import open_camera
+    import detect
 
     log = runlog.start_run("calibrate-verify")
-    H = mapping.load_homography(path)
+    cal = mapping.load_calibration(path)
+    H = cal["H"]
     table_z = config.require("TABLE_Z_MM")
     hover_z = table_z + config.HOVER_OFFSET_MM
+    arm_mod.check_target(*config.require("HOME_XYZ_MM"))
+    det = detect.Detector(roi=None)
+    cap = detect.open_camera(camera)
+    mapping.check_frame_size(cal, detect.grab(cap))
     a = arm_mod.Arm()
     a.connect()
     a.confirm_workspace_clear()
     a.home()
-    cap = open_camera(camera)
-    clicks: "queue.Queue[tuple[int, int]]" = queue.Queue()
+    clicks: "queue.Queue[tuple[float, float]]" = queue.Queue()
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback(WINDOW, lambda e, x, y, f, p: clicks.put((x, y)) if e == cv2.EVENT_LBUTTONDOWN else None)
-    print("Click a point on the feed; the arm will hover above it. h = home, q = quit.")
+    cv2.setMouseCallback(WINDOW, lambda e, x, y, f, p: clicks.put((float(x), float(y))) if e == cv2.EVENT_LBUTTONDOWN else None)
+    print("Click a point -> the arm hovers above it. b = hover above the best-detected block. h = home. q = quit.")
     last = None
+    dets = []
+    n = 0
     try:
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
-            vis = frame.copy()
+            n += 1
+            if n % 3 == 1:
+                dets = det.detect(frame)
+            vis = detect.draw(frame, dets, roi=None)
             if last is not None:
-                cv2.drawMarker(vis, last, (0, 200, 255), cv2.MARKER_CROSS, 30, 2)
-            cv2.putText(vis, "click = hover there   h = home   q = quit", (10, 30),
+                cv2.drawMarker(vis, (int(last[0]), int(last[1])), (0, 200, 255), cv2.MARKER_CROSS, 30, 2)
+            cv2.putText(vis, "click = hover there   b = hover over best block   h = home   q = quit", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             cv2.imshow(WINDOW, vis)
             key = cv2.waitKey(30) & 0xFF
@@ -164,24 +212,36 @@ def verify(camera: int, path: str) -> None:
                 break
             if key == ord("h"):
                 a.home()
+                continue
+            if key == ord("b"):
+                if dets:
+                    best = max(dets, key=lambda d: d.conf)
+                    clicks.put((best.cx, best.cy))
+                    print(f"best detection: {best}")
+                else:
+                    print("no block detected")
             try:
                 px, py = clicks.get_nowait()
             except queue.Empty:
                 continue
             last = (px, py)
             x, y = mapping.pixel_to_arm(px, py, H)
-            log.info("verify click pixel=(%d,%d) -> arm=(%.1f,%.1f) hover z=%.1f", px, py, x, y, hover_z)
+            log.info("verify pixel=(%.0f,%.0f) -> arm=(%.1f,%.1f) hover z=%.1f", px, py, x, y, hover_z)
             try:
                 a.move_to(x, y, hover_z)
-            except arm_mod.UnsafeTarget as e:
+            except (arm_mod.UnsafeTarget, arm_mod.MoveRefused) as e:
                 log.warning("refused: %s", e)
-            print(f"pixel ({px},{py}) -> arm ({x:.1f}, {y:.1f}) mm. Measure the cup-to-mark offset; "
+                print(f"refused: {e}")
+                continue
+            print(f"pixel ({px:.0f},{py:.0f}) -> arm ({x:.1f}, {y:.1f}) mm. Measure the cup-to-target offset; "
                   f"gate is ~5 mm on 3+ spots including one near the edge.")
     finally:
         cap.release()
         cv2.destroyAllWindows()
-        a.home()
-        a.close()
+        try:
+            a.home()
+        finally:
+            a.close()
 
 
 def check(path: str) -> None:
@@ -190,10 +250,8 @@ def check(path: str) -> None:
     print(f"{path}: created {data.get('created')} frame_size={data.get('frame_size')}")
     print("H =\n" + np.array2string(H, precision=5))
     px, ar = data["pixel_pts"], data["arm_pts"]
-    _, res = mapping.fit_homography(px, ar)
-    for i in range(len(px)):
-        print(f"  pair {i + 1}: pixel=({px[i][0]:.0f},{px[i][1]:.0f}) arm=({ar[i][0]:.1f},{ar[i][1]:.1f}) "
-              f"residual={res[i]:.2f} mm")
+    for line in mapping.describe_residuals(px, ar):
+        print(line)
     w, h = data.get("frame_size", (config.FRAME_WIDTH, config.FRAME_HEIGHT))
     for name, (x, y) in {"centre": (w / 2, h / 2), "top-left": (0, 0), "bottom-right": (w, h)}.items():
         ax, ay = mapping.pixel_to_arm(x, y, H)
@@ -204,16 +262,18 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--verify", action="store_true")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--no-snap", action="store_true", help="collect: use raw clicks, do not snap to detected blocks")
     ap.add_argument("--camera", type=int, default=None, help="default config.WEBCAM_INDEX")
     ap.add_argument("--out", default=None, help="default config.CALIBRATION_PATH")
     args = ap.parse_args()
     args.out = args.out or config.CALIBRATION_PATH
+    camera = config.WEBCAM_INDEX if args.camera is None else args.camera
     if args.check:
         check(args.out)
     elif args.verify:
-        verify(args.camera, args.out)
+        verify(camera, args.out)
     else:
-        collect(args.camera, args.out)
+        collect(camera, args.out, snap=not args.no_snap)
 
 
 if __name__ == "__main__":

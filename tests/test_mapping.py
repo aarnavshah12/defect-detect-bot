@@ -27,17 +27,23 @@ def test_fit_and_roundtrip():
     assert abs(x - arm[4][0]) < 1e-3 and abs(y - arm[4][1]) < 1e-3
 
 
-def test_save_load(tmp_path=None):
+def test_save_load_extensionless_and_frame_size():
     px, arm = _synthetic_pairs()
     H, _ = mapping.fit_homography(px, arm)
-    d = tmp_path or tempfile.mkdtemp()
-    p = os.path.join(str(d), "calibration.npy")
-    mapping.save_calibration(H, px, arm, path=p)
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "mycal")  # no .npy extension: must land at exactly this path
+    mapping.save_calibration(H, px, arm, path=p, frame_size=(1280, 720))
+    assert os.path.exists(p)
     data = mapping.load_calibration(p)
-    assert np.allclose(data["H"], H)
-    assert data["pixel_pts"].shape == (6, 2)
-    x, y = mapping.pixel_to_arm(100, 100, mapping.load_homography(p))
-    assert abs(x - arm[0][0]) < 1e-3
+    assert np.allclose(data["H"], H) and data["pixel_pts"].shape == (6, 2)
+    assert tuple(data["frame_size"]) == (1280, 720)
+    mapping.check_frame_size(data, np.zeros((720, 1280, 3), np.uint8))
+    try:
+        mapping.check_frame_size(data, np.zeros((1080, 1920, 3), np.uint8))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected frame-size mismatch")
 
 
 def test_missing_raises():
@@ -48,5 +54,39 @@ def test_missing_raises():
     raise AssertionError("expected CalibrationMissing")
 
 
+def test_degenerate_sets_rejected():
+    px, arm = _synthetic_pairs()
+    # duplicate click
+    px2 = px[:4].copy(); px2[3] = px2[0] + [3, 3]
+    for bad_px, bad_arm, what in (
+        (px2, arm[:4], "duplicate"),
+        (np.array([[100, 100], [600, 100], [1100, 100], [1600, 100]], float), arm[:4], "collinear"),
+    ):
+        try:
+            mapping.fit_homography(bad_px, bad_arm)
+        except ValueError:
+            continue
+        raise AssertionError(f"{what} point set should be rejected")
+
+
+def test_leave_one_out_flags_a_typo():
+    px, arm = _synthetic_pairs()
+    assert mapping.leave_one_out_residuals(px[:4], arm[:4]) is None  # exact fit: no check possible
+    bad = arm.copy(); bad[2][0] += 30.0  # mistyped x on pair 3
+    loo = mapping.leave_one_out_residuals(px, bad)
+    assert loo[2] > 20  # the typo'd pair cannot be predicted from the others
+    good = mapping.leave_one_out_residuals(px, arm)
+    assert np.nanmax(good) < 1e-2
+    i, with_all, without = mapping.suspect_pair(px, bad)
+    assert i == 2 and with_all > 3 and without < 1e-2  # removing pair 3 makes the rest fit exactly
+    assert mapping.suspect_pair(px, arm)[1] < 1e-2
+    lines = mapping.describe_residuals(px, bad)
+    assert any("SUSPECT: pair 3" in ln for ln in lines)
+    assert not any("SUSPECT" in ln for ln in mapping.describe_residuals(px, arm))
+
+
 if __name__ == "__main__":
-    test_fit_and_roundtrip(); test_save_load(); test_missing_raises(); print("mapping tests OK")
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn()
+    print("mapping tests OK")

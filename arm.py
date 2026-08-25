@@ -30,7 +30,10 @@ Motion commands have NO completion acknowledgement, so move_to() waits the comma
 
 Safety (enforced here, not in comments): every target must be inside config.REACH_* and Z must be
 >= config.TABLE_Z_MM, otherwise UnsafeTarget is raised (logged) and nothing is sent. The first real
-motion in a process requires the owner to answer "Workspace clear? [y/N]".
+motion in a process requires the owner to answer "Workspace clear? [y/N]". connect() refuses to
+proceed if the arm never answers. The position read-back after a move is the protocol's only
+completion signal: if it is missing or off by more than POSITION_TOLERANCE_MM the move is treated
+as refused (the firmware silently ignores unreachable targets) and MoveRefused is raised.
 
 CLI (owner tools):
     python arm.py --probe            open the port, try read_xyz at 9600 and 115200, no motion
@@ -64,10 +67,11 @@ NOZZLE_PUMP_ON = 1
 NOZZLE_PUMP_OFF_VALVE_OPEN = 2
 NOZZLE_VALVE_CLOSE = 3
 
-POSITION_TOLERANCE_MM = 8.0  # servo read-back quantisation (validated ~8 mm); above this -> warning
-READY_TIMEOUT_S = 25.0       # firmware sleeps 10 s + homes ~3 s after a reset before answering
-_READ_DELAY_S = 0.1          # the docs' MaxArm_ctl sleeps 0.1 s before reading a reply
-_SETTLE_S = 0.3              # margin added to every commanded move duration
+POSITION_TOLERANCE_MM = 10.0  # read-back within this = arrived (servo feedback validated to ~8 mm)
+READY_TIMEOUT_S = 25.0        # firmware sleeps 10 s + homes ~3 s after a reset before answering
+MIN_MOVE_MS = 200             # shorter = a full-speed jerk
+_READ_DELAY_S = 0.1           # the docs' MaxArm_ctl sleeps 0.1 s before reading a reply
+_SETTLE_S = 0.3               # margin added to every commanded move duration
 
 
 class ArmError(RuntimeError):
@@ -76,6 +80,10 @@ class ArmError(RuntimeError):
 
 class UnsafeTarget(ValueError):
     """Target outside the configured reach limits or below table Z. Never sent to the arm."""
+
+
+class MoveRefused(ArmError):
+    """The arm did not reach the commanded target (silent IK refusal, stall, or no read-back)."""
 
 
 # ---------------------------------------------------------------- protocol helpers
@@ -103,9 +111,8 @@ def parse_frame(buf: bytes, expect_func: int) -> bytes | None:
             return None
         func, length = buf[i + 2], buf[i + 3]
         end = i + 4 + length
-        if end + 1 > len(buf):
-            return None
-        if func == expect_func and buf[end] in (checksum(buf[i:end]), checksum(buf[i + 2:end])):
+        # A truncated candidate (bogus length byte) is skipped like a bad one; keep scanning.
+        if end + 1 <= len(buf) and func == expect_func and buf[end] in (checksum(buf[i:end]), checksum(buf[i + 2:end])):
             return bytes(buf[i + 4:end])
         i += 2
 
@@ -183,12 +190,17 @@ class Arm:
         self._ser = ser
         pos = self.wait_ready()
         if pos is None:
-            self.log.warning("arm: no reply to read_xyz on %s @ %d within %.0fs (wrong baud? firmware not "
-                             "MaxArm_micropython_microUSB? arm switched off?)", self.port, self.baudrate,
-                             READY_TIMEOUT_S)
-        else:
-            self.log.info("arm: connected, current xyz=%s", pos)
+            self.close()
+            raise ArmError(f"arm did not answer read_xyz on {self.port} @ {self.baudrate} within "
+                           f"{READY_TIMEOUT_S:.0f}s (arm switched off? wrong baud? firmware not "
+                           f"MaxArm_micropython_microUSB? wrong /dev/cu.usbserial-* device?)")
+        self.log.info("arm: connected, current xyz=%s", pos)
         return self
+
+    @property
+    def cleared(self) -> bool:
+        """True once the owner has authorised motion this session (or in dry-run)."""
+        return self._cleared or self.dry_run
 
     def wait_ready(self, timeout: float = READY_TIMEOUT_S) -> tuple[int, int, int] | None:
         """Poll read_xyz until the firmware answers (after a reset it sleeps 10 s, then homes)."""
@@ -251,13 +263,22 @@ class Arm:
 
     # -- motion ---------------------------------------------------------------
     def move_to(self, x: float, y: float, z: float, ms: int | None = None) -> tuple[int, int, int] | None:
-        """Validate, send, block until the commanded duration has elapsed, read back the position."""
-        ms = config.MOVE_MS if ms is None else ms
+        """Validate, send, block for the commanded duration, then verify arrival via read-back.
+
+        Raises UnsafeTarget (nothing sent), ValueError for a duration outside
+        [MIN_MOVE_MS, MOVE_TIMEOUT_S] (nothing sent), or MoveRefused when the read-back is missing or
+        farther than POSITION_TOLERANCE_MM from the target.
+        """
+        ms = config.MOVE_MS if ms is None else int(ms)
         try:
             check_target(x, y, z)
         except UnsafeTarget as e:
             self.log.error("arm: REFUSED target (%.1f, %.1f, %.1f): %s", x, y, z, e)
             raise
+        wait_s = ms / 1000.0 + _SETTLE_S
+        if ms < MIN_MOVE_MS or wait_s > config.MOVE_TIMEOUT_S:
+            raise ValueError(f"duration {ms} ms outside [{MIN_MOVE_MS}, "
+                             f"{int((config.MOVE_TIMEOUT_S - _SETTLE_S) * 1000)}] ms (config.MOVE_TIMEOUT_S)")
         if self.dry_run:
             self.log.info("[dry-run] arm: move_to(%.1f, %.1f, %.1f) %d ms", x, y, z, ms)
             return None
@@ -266,14 +287,16 @@ class Arm:
         self.log.info("arm: move_to(%.1f, %.1f, %.1f) %d ms frame=%s", x, y, z, ms, frame.hex())
         t0 = time.time()
         self._send(frame)
-        self.wait(min(ms / 1000.0 + _SETTLE_S, config.MOVE_TIMEOUT_S))
+        self.wait(wait_s)  # never truncated: there is no completion ack to time out on
         pos = self.read_xyz()
         if pos is None:
-            self.log.warning("arm: no position read-back after move (%.2fs)", time.time() - t0)
-        else:
-            err = max(abs(pos[0] - x), abs(pos[1] - y), abs(pos[2] - z))
-            level = self.log.warning if err > POSITION_TOLERANCE_MM else self.log.info
-            level("arm: at %s after %.2fs (max axis error %.1f mm)", pos, time.time() - t0, err)
+            pos = self.read_xyz()  # one retry: a single dropped reply is not a refused move
+        err = None if pos is None else max(abs(pos[0] - x), abs(pos[1] - y), abs(pos[2] - z))
+        if pos is None or err > POSITION_TOLERANCE_MM:
+            self.log.error("arm: target (%.1f, %.1f, %.1f) NOT reached: read-back %s (err %s mm) after %.2fs "
+                           "-> treating as refused", x, y, z, pos, err, time.time() - t0)
+            raise MoveRefused(f"target ({x:.0f}, {y:.0f}, {z:.0f}) not reached; read-back {pos}")
+        self.log.info("arm: at %s after %.2fs (max axis error %.1f mm)", pos, time.time() - t0, err)
         return pos
 
     def home(self, ms: int = 1500) -> tuple[int, int, int] | None:
@@ -340,7 +363,7 @@ def _jog(a: Arm) -> None:
                     continue
                 ms = int(parts[3]) if len(parts) == 4 else config.MOVE_MS
                 print("at", a.move_to(parts[0], parts[1], parts[2], ms))
-        except (UnsafeTarget, ValueError, config.ConfigError) as e:
+        except (UnsafeTarget, ValueError, config.ConfigError, ArmError) as e:
             print("refused:", e)
 
 
