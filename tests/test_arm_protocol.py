@@ -200,6 +200,19 @@ def test_move_to_verifies_arrival_and_raises_on_refusal():
         _restore(saved)
 
 
+def test_home_rises_first():
+    saved = _set_envelope()
+    config.TRAVEL_Z_MM, config.REACH_Z_MM = 160.0, (50.0, 200.0)
+    try:
+        a = _fake_arm()
+        a._ser.pos = (0, -200, 60)  # down at table level
+        a.home()
+        sent = [struct.unpack("<hhhH", f[4:12])[:3] for f in a._ser.written if f[2] == arm.FUNC_SET_XYZ]
+        assert sent[0] == (0, -200, 160) and sent[1] == (0, -160, 150)
+    finally:
+        _restore(saved)
+
+
 def test_move_duration_bounds_refused_before_sending():
     saved = _set_envelope()
     try:

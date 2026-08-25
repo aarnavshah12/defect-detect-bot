@@ -214,9 +214,7 @@ def verify(camera: int, path: str) -> None:
             if key == ord("q"):
                 break
             if key == ord("h"):
-                if last is not None:
-                    a.move_to(*mapping.pixel_to_arm(last[0], last[1], H), config.TRAVEL_Z_MM)
-                a.home()
+                a.home()  # rises to travel height first
                 last = None
                 continue
             if key == ord("b"):
@@ -233,11 +231,10 @@ def verify(camera: int, path: str) -> None:
             x, y = mapping.pixel_to_arm(px, py, H)
             log.info("verify pixel=(%.0f,%.0f) -> arm=(%.1f,%.1f) hover z=%.1f", px, py, x, y, hover_z)
             try:
-                if last is not None:  # rise straight up from the previous spot before moving sideways
-                    a.move_to(*mapping.pixel_to_arm(last[0], last[1], H), config.TRAVEL_Z_MM)
-                last = (px, py)
+                a.rise()  # straight up from wherever the arm actually is, then sideways at travel height
                 a.move_to(x, y, config.TRAVEL_Z_MM)
                 a.move_to(x, y, hover_z)
+                last = (px, py)
             except (arm_mod.UnsafeTarget, arm_mod.MoveRefused) as e:
                 log.warning("refused: %s", e)
                 print(f"refused: {e}")

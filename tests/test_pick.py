@@ -48,6 +48,9 @@ class FakeArm:
     def home(self, ms=None):
         self.calls.append(("home",))
 
+    def rise(self):
+        pass
+
     def wait(self, s):
         pass
 

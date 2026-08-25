@@ -363,8 +363,22 @@ class Arm:
         self.log.info("arm: at %s after %.2fs (max axis error %.1f mm)", pos, time.time() - t0, err)
         return pos
 
+    def rise(self) -> None:
+        """Go straight up to config.TRAVEL_Z_MM from wherever the arm actually is (no-op if already there)."""
+        if self.dry_run:
+            return
+        pos = self.read_xyz()
+        if pos is None or pos[2] >= config.TRAVEL_Z_MM - 5:
+            return
+        try:
+            self.move_to(pos[0], pos[1], config.TRAVEL_Z_MM, 800)
+        except (UnsafeTarget, MoveRefused) as e:
+            self.log.warning("arm: could not rise to travel height from %s (%s); moving anyway", pos, e)
+
     def home(self, ms: int = 1500) -> tuple[int, int, int] | None:
+        """Rise to travel height first, then go to config.HOME_XYZ_MM."""
         hx, hy, hz = config.require("HOME_XYZ_MM")
+        self.rise()
         self.log.info("arm: home")
         return self.move_to(hx, hy, hz, ms)
 
