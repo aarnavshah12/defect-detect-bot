@@ -20,7 +20,8 @@ import os
 MODEL_ID = "aarnavs-space/blocks-lllea-p7f2h-1-rfdetr-small-t1"
 API_KEY_ENV = "ROBOFLOW_API_KEY"
 # Exact class string as it appears on the dashboard (classes: blue, green, red, yellow).
-TARGET_CLASS = "red"
+# Owner switched the target from "red" to "blue" on 2026-08-25. `pick.py --class X` overrides.
+TARGET_CLASS = "blue"
 CONFIDENCE = 0.5  # minimum detection confidence
 # Optional pick-area region of interest (x, y, w, h) in FULL-FRAME pixels. Detection runs on
 # this crop and centres are mapped back to full-frame pixels, so calibration is unaffected.
