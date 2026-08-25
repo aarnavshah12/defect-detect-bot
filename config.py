@@ -49,18 +49,18 @@ MOVE_TIMEOUT_S = 6.0  # maximum allowed move duration (+ settle); longer moves a
 # Default duration for a move (ms). Longer = gentler.
 MOVE_MS = 1000
 
-# OWNER-PROVIDED (TODO): arm Z (mm) where the suction cup just touches the table.
-TABLE_Z_MM: float | None = None
+# Owner-provided (jogged 2026-08-25): arm Z (mm) where the suction cup just touches the table.
+TABLE_Z_MM: float | None = 47.0  # measured with arm.py --jog, 2026-08-25
 # Hover height above table / drop zone (mm).
 HOVER_OFFSET_MM = 40.0
-# OWNER-PROVIDED (TODO): drop zone end-effector position (mm).
-DROP_XYZ_MM: tuple[float, float, float] | None = None
-# OWNER-PROVIDED (TODO): home pose, out of camera view, clear of the pick area (mm).
-HOME_XYZ_MM: tuple[float, float, float] | None = None
-# OWNER-PROVIDED (TODO): reach limits the arm may be sent to, (min, max) per axis in mm.
-REACH_X_MM: tuple[float, float] | None = None
-REACH_Y_MM: tuple[float, float] | None = None
-REACH_Z_MM: tuple[float, float] | None = None
+# Owner-provided: drop zone end-effector position (mm).
+DROP_XYZ_MM: tuple[float, float, float] | None = (-266.0, 13.0, 153.0)
+# Owner-provided: home pose, out of camera view, clear of the pick area (mm).
+HOME_XYZ_MM: tuple[float, float, float] | None = (-210.0, -56.0, 139.0)
+# Owner-provided: reach limits the arm may be sent to, (min, max) per axis in mm (envelope visited in --jog).
+REACH_X_MM: tuple[float, float] | None = (-269.0, 272.0)
+REACH_Y_MM: tuple[float, float] | None = (-256.0, 24.0)
+REACH_Z_MM: tuple[float, float] | None = (47.0, 210.0)
 
 # Suction settle times (s) from the plan's pick sequence.
 SUCTION_ON_PAUSE_S = 0.5
