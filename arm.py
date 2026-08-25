@@ -182,6 +182,24 @@ def check_target(x: float, y: float, z: float) -> None:
             raise UnsafeTarget(f"{axis}={v:.1f} outside reach [{lo}, {hi}]")
 
 
+def _cooked_input(prompt: str) -> str:
+    """input() that works even if the terminal is in cbreak/raw mode (e.g. inside --jog)."""
+    try:
+        import termios
+
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+    except Exception:  # noqa: BLE001 - not a tty
+        return input(prompt)
+    cooked = list(saved)
+    cooked[3] |= termios.ICANON | termios.ECHO
+    termios.tcsetattr(fd, termios.TCSADRAIN, cooked)
+    try:
+        return input(prompt)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
 # ---------------------------------------------------------------- arm
 
 class Arm:
@@ -253,7 +271,7 @@ class Arm:
         """Ask once per process before any real motion. No default yes."""
         if self.dry_run or self._cleared:
             return
-        answer = input("Workspace clear? Arm is about to move. [y/N] ").strip().lower()
+        answer = _cooked_input("Workspace clear? Arm is about to move. [y/N] ").strip().lower()
         if answer != "y":
             raise ArmError("owner did not confirm the workspace is clear; aborting before any motion")
         self._cleared = True
@@ -380,6 +398,7 @@ def _jog(a: Arm) -> None:
     steps = {"1": 2, "2": 10, "3": 25}
     step = 10
     pos = list(a.read_xyz() or (0, 0, 0))
+    a.confirm_workspace_clear()  # ask now, in normal terminal mode, not on the first key press
     stamped: dict[str, object] = {}
     lo = list(pos)
     hi = list(pos)
