@@ -231,6 +231,7 @@ class Arm:
         self.bootstrap = bootstrap  # jog-only: validate against firmware limits instead of config
         self._ser = None
         self._cleared = False
+        self._last_pos: tuple[int, int, int] | None = None  # last position read back (for diagnostics)
         self.log = runlog.get_logger()
 
     # -- connection -------------------------------------------------------------
@@ -259,6 +260,7 @@ class Arm:
                            f"{READY_TIMEOUT_S:.0f}s (arm switched off? wrong baud? firmware not "
                            f"MaxArm_micropython_microUSB? wrong /dev/cu.usbserial-* device?)")
         self.log.info("arm: connected, current xyz=%s", pos)
+        self._last_pos = pos
         return self
 
     @property
@@ -358,12 +360,18 @@ class Arm:
         err = None if pos is None else max(abs(pos[0] - x), abs(pos[1] - y), abs(pos[2] - z))
         if pos is None or err > POSITION_TOLERANCE_MM:
             ext = extension_ratio(x, y, z)
-            self.log.error("arm: target (%.1f, %.1f, %.1f) NOT reached: read-back %s (err %s mm) after %.2fs "
-                           "-> treating as refused (needs %.0f%% of full stretch)", x, y, z, pos, err,
-                           time.time() - t0, ext * 100)
-            raise MoveRefused(f"target ({x:.0f}, {y:.0f}, {z:.0f}) not reached; read-back {pos}; "
-                              f"it needs {ext * 100:.0f}% of the arm's full stretch")
+            stuck = (pos is not None and self._last_pos is not None
+                     and max(abs(pos[i] - self._last_pos[i]) for i in range(3)) <= 2)
+            if stuck:
+                why = ("the arm did not move AT ALL (read-back unchanged) - is the 12 V power on and the arm's "
+                       "switch on? USB alone keeps the board talking but not the servos")
+            else:
+                why = f"it needs {ext * 100:.0f}% of the arm's full stretch (likely out of reach)"
+            self.log.error("arm: target (%.1f, %.1f, %.1f) NOT reached: read-back %s (err %s mm) after %.2fs -> "
+                           "treating as refused; %s", x, y, z, pos, err, time.time() - t0, why)
+            raise MoveRefused(f"target ({x:.0f}, {y:.0f}, {z:.0f}) not reached; read-back {pos}; {why}")
         self.log.info("arm: at %s after %.2fs (max axis error %.1f mm)", pos, time.time() - t0, err)
+        self._last_pos = pos
         return pos
 
     def rise(self) -> None:
