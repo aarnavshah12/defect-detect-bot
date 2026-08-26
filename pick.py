@@ -292,6 +292,8 @@ def main() -> None:
     ap.add_argument("--camera", type=int, default=None, help="default config.WEBCAM_INDEX")
     ap.add_argument("--conf", type=float, default=None, help="default config.CONFIDENCE")
     ap.add_argument("--max-cycles", type=int, default=20)
+    ap.add_argument("--countdown", type=float, default=5.0,
+                    help="seconds to show the live window before anything moves (arrange windows for a demo)")
     ap.add_argument("--no-window", action="store_true")
     args = ap.parse_args()
 
@@ -319,6 +321,19 @@ def main() -> None:
             cv2.waitKey(1)
     a = arm_mod.Arm(dry_run=args.dry_run).connect()
     try:
+        a.confirm_workspace_clear()  # ask now, so the countdown and the run are uninterrupted
+        if show and args.countdown > 0:
+            t_end = time.time() + args.countdown
+            while time.time() < t_end:
+                ok, frame = cap.read()
+                if ok:
+                    vis = detect.draw(frame, det.detect(frame), args.target_class)
+                    left = int(t_end - time.time()) + 1
+                    cv2.putText(vis, f"starting in {left}", (40, 110), cv2.FONT_HERSHEY_SIMPLEX, 3.0, (0, 0, 0), 10)
+                    cv2.putText(vis, f"starting in {left}", (40, 110), cv2.FONT_HERSHEY_SIMPLEX, 3.0, (255, 255, 255), 4)
+                    cv2.imshow("pick", vis)
+                if (cv2.waitKey(50) & 0xFF) == ord("q"):
+                    raise SystemExit("cancelled during countdown")
         loop = PickLoop(det, a, lambda: detect.grab(cap), H, target_class=args.target_class,
                         dry_run=args.dry_run, once=args.once, max_cycles=args.max_cycles, show=show)
         loop.run()
