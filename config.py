@@ -46,7 +46,7 @@ FRAME_HEIGHT = 1080
 # settings). This webcam has no exposure-time/gain control, but its "brightness" acts at sensor level:
 # 128 (default) blew out the block tops in a bright room; 112 keeps them textured (measured 2026-08-26).
 CAMERA_UVC_NAME = "HD Web Camera"
-CAMERA_CONTROLS = {"brightness": 100, "contrast": 128, "backlight-compensation": 0, "auto-exposure-mode": 2}
+CAMERA_CONTROLS = {"brightness": 88, "contrast": 128, "backlight-compensation": 0, "auto-exposure-mode": 2}
 
 # --------------------------------------------------------------------------
 # Arm (Hiwonder MaxArm, ESP32 controller over USB serial)
