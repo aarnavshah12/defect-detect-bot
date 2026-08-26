@@ -95,7 +95,7 @@ SUCTION_OFF_PAUSE_S = 0.3
 VENT_S = 1.0
 # When the arm sets a block down (calibration carry mode), release this much ABOVE the pick height so the
 # cup is not pressed into the block when it vents (a squashed cup drags the block back up).
-RELEASE_LIFT_MM = 25.0
+RELEASE_LIFT_MM = 32.0  # arm Z error grows near the base; this margin covers it
 
 # --------------------------------------------------------------------------
 # Calibration / logging
