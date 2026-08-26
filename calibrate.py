@@ -306,7 +306,14 @@ def verify(camera: int, path: str) -> None:
 
 # --auto grid in arm mm (in front of the base, comfortably inside reach). Points the arm refuses or the
 # camera cannot see are skipped; at least mapping.MIN_PAIRS (ideally RECOMMENDED_PAIRS) must succeed.
-AUTO_GRID = config.CALIB_GRID
+def _auto_grid():
+    """config.CALIB_GRID minus spots near the bin, ordered farthest-from-bin first."""
+    dx, dy = (config.DROP_XYZ_MM or (0.0, 0.0, 0.0))[:2]
+    pts = [(x, y) for x, y in config.CALIB_GRID if math.hypot(x - dx, y - dy) >= config.DROP_KEEPOUT_MM]
+    return sorted(pts, key=lambda p: -math.hypot(p[0] - dx, p[1] - dy))
+
+
+AUTO_GRID = _auto_grid()
 PRESENT_CLEARANCE_MM = config.BLOCK_HEIGHT_MM + 30.0  # cup height above table Z while you slide the block under it
 EDGE_MARGIN_PX = 8  # a box touching the frame edge is clipped: its centre is wrong
 

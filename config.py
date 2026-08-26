@@ -99,6 +99,9 @@ CALIBRATION_PATH = "calibration.npy"
 # view covered arm x from about -150 to +60 (x = +151 sat on the top edge and was clipped) and y down
 # to about -240. Spots the arm cannot reach are skipped automatically.
 CALIB_GRID = [(x, y) for y in (-120.0, -160.0, -200.0, -235.0) for x in (-150.0, -85.0, -20.0, 45.0)]
+# Calibration spots closer than this to DROP_XYZ_MM are skipped (the bin is there), and the run starts
+# at the spot farthest from the bin.
+DROP_KEEPOUT_MM = 170.0
 LOG_DIR = "logs"
 # "Lift failed" check: same-class detection still within this many px of the pick spot.
 LIFT_FAIL_RADIUS_PX = 10.0
