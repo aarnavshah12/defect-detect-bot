@@ -15,19 +15,18 @@ import os
 # --------------------------------------------------------------------------
 # Trained model (workspace/model-slug). Version 1 confirmed on the dashboard
 # via the API on 2026-08-25 (project aarnavs-space/blocks-lllea-p7f2h, rfdetr-small).
-# NOTE: `inference.get_model` accepts this slug as-is, or "blocks-lllea-p7f2h/1"; appending "/1"
-# to the slug is rejected as an invalid model id (verified 2026-08-25).
-MODEL_ID = "aarnavs-space/blocks-lllea-p7f2h-1-rfdetr-small-t1"
+# Owner's defect model (project block-defects-9kz1n, version 2, rfdetr-large, classes Defect / Good),
+# switched in 2026-08-26. The earlier placeholder was "aarnavs-space/blocks-lllea-p7f2h-1-rfdetr-small-t1".
+# `inference.get_model` accepts the slug as-is; do NOT append "/2".
+MODEL_ID = "aarnavs-space/block-defects-9kz1n-2-rfdetr-large-t1"
 API_KEY_ENV = "ROBOFLOW_API_KEY"
-# Exact class string as it appears on the dashboard (classes: blue, green, red, yellow).
-# Owner switched the target from "red" to "blue" on 2026-08-25, then to "any" because the placeholder
-# model mislabels colours (the blue block reads as "yellow"); "any" = any block-sized detection.
-# `pick.py --class blue` overrides once a better model is in.
-TARGET_CLASS = "any"
-# Plausible block size in pixels (4 cm blocks are ~120-190 px in the mounted view). Detections outside
-# this range are dropped: the model also boxes hands, the laptop and the mat as "blue".
-MIN_BOX_PX = 50
-MAX_BOX_PX = 320
+# Exact class string as the model reports it (this model: "Defect", "Good"). Only this class is picked;
+# "any" = any block-sized detection. `pick.py --class X` overrides. Calibration always uses any block.
+TARGET_CLASS = "Defect"
+# Plausible block size in pixels (blocks are ~200-390 px in the current mounted view, a block on its long
+# side is the tallest). Detections outside this range are dropped (laptop, hands, the mat).
+MIN_BOX_PX = 100
+MAX_BOX_PX = 450
 CONFIDENCE = 0.5  # minimum detection confidence
 # Optional pick-area region of interest (x, y, w, h) in FULL-FRAME pixels. Detection runs on
 # this crop and centres are mapped back to full-frame pixels, so calibration is unaffected.
@@ -81,6 +80,9 @@ HOME_XYZ_MM: tuple[float, float, float] | None = (-210.0, -56.0, 139.0)
 REACH_X_MM: tuple[float, float] | None = (-269.0, 272.0)
 REACH_Y_MM: tuple[float, float] | None = (-256.0, 24.0)
 REACH_Z_MM: tuple[float, float] | None = (47.0, 210.0)
+# Never send the cup within this horizontal radius of the arm's own base (the base is in the camera's view
+# and can be detected as a block). The firmware refuses < 50 mm; the base structure is wider than that.
+MIN_RADIUS_MM = 120.0
 
 # Suction settle times (s) from the plan's pick sequence.
 SUCTION_ON_PAUSE_S = 0.5

@@ -66,6 +66,7 @@ def _frame():
 def _setup():
     config.TARGET_CLASS = "blue"
     config.TABLE_Z_MM, config.BLOCK_HEIGHT_MM, config.CUP_PRESS_MM, config.TRAVEL_Z_MM = 47.0, 40.0, 5.0, 160.0
+    config.MIN_RADIUS_MM = 120.0
 
 
 def test_manual_mode_builds_a_valid_calibration():

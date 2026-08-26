@@ -193,6 +193,9 @@ def check_target(x: float, y: float, z: float) -> None:
     table_z = config.require("TABLE_Z_MM")
     if z < table_z:
         raise UnsafeTarget(f"z={z:.1f} is below table Z {table_z:.1f}")
+    r = math.hypot(x, y)
+    if r < config.MIN_RADIUS_MM:
+        raise UnsafeTarget(f"radius {r:.0f} mm is inside the arm's own base zone (< {config.MIN_RADIUS_MM:.0f})")
     for axis, v in (("X", x), ("Y", y), ("Z", z)):
         lo, hi = config.require(f"REACH_{axis}_MM")
         if not lo <= v <= hi:

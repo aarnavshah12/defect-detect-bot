@@ -72,6 +72,7 @@ def _setup():
     config.REACH_X_MM = (-200.0, 200.0)
     config.REACH_Y_MM = (-280.0, -80.0)
     config.REACH_Z_MM = (60.0, 250.0)
+    config.MIN_RADIUS_MM = 120.0
     # pixel (px, py) -> arm: x = 0.25*px - 240, y = -0.25*py - 100   (pure scale/offset homography)
     return np.array([[0.25, 0, -240.0], [0, -0.25, -100.0], [0, 0, 1.0]])
 

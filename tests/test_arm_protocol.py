@@ -62,6 +62,7 @@ def _set_envelope():
     saved = {k: getattr(config, k) for k in ("TABLE_Z_MM", "REACH_X_MM", "REACH_Y_MM", "REACH_Z_MM", "HOME_XYZ_MM")}
     config.TABLE_Z_MM, config.REACH_X_MM, config.REACH_Y_MM, config.REACH_Z_MM = 50.0, (-150.0, 150.0), (-280.0, -100.0), (50.0, 200.0)
     config.HOME_XYZ_MM = (0.0, -160.0, 150.0)
+    config.MIN_RADIUS_MM = 120.0
     return saved
 
 
@@ -74,7 +75,7 @@ def test_safety_rejects_bad_targets():
     saved = _set_envelope()
     try:
         arm.check_target(0, -200, 90)  # fine
-        for bad in ((0, -200, 49.9), (200, -200, 90), (0, -50, 90), (0, -200, 250)):
+        for bad in ((0, -200, 49.9), (200, -200, 90), (0, -50, 90), (0, -200, 250), (30, -100, 90)):  # last: on the base
             try:
                 arm.check_target(*bad)
             except arm.UnsafeTarget:

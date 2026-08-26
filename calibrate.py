@@ -185,7 +185,7 @@ def verify(camera: int, path: str) -> None:
     table_z = config.require("TABLE_Z_MM")
     hover_z = table_z + config.HOVER_OFFSET_MM
     arm_mod.check_target(*config.require("HOME_XYZ_MM"))
-    det = detect.Detector(roi=None)
+    det = detect.Detector(roi=None)  # any block-sized detection counts in verify (draw() marks targets thicker)
     cap = detect.open_camera(camera)
     mapping.check_frame_size(cal, detect.grab(cap))
     a = arm_mod.Arm()
@@ -459,6 +459,7 @@ def auto(camera: int, out_path: str, carry: bool = False) -> None:
 
     show(grab(), [], None)
     what = "block" if config.TARGET_CLASS == "any" else f"{config.TARGET_CLASS} block"
+    what = "block"
     if carry:
         print(f"Carry calibration: {len(AUTO_GRID)} spots. ONE {what} on the table, nothing else block-sized in view. "
               f"You centre the block under the cup once; the arm does the rest (about {len(AUTO_GRID) * 15} s).")
@@ -469,8 +470,8 @@ def auto(camera: int, out_path: str, carry: bool = False) -> None:
     try:
         a.confirm_workspace_clear()
         a.home()
-        pixel_pts, arm_pts = auto_collect(AUTO_GRID, a, grab, det, input, config.TARGET_CLASS, table_z, log, show,
-                                          carry=carry)
+        # Calibration is geometry: ANY block works, whatever class the model gives it.
+        pixel_pts, arm_pts = auto_collect(AUTO_GRID, a, grab, det, input, "any", table_z, log, show, carry=carry)
     finally:
         try:
             a.home()
