@@ -136,8 +136,12 @@ def draw(frame: np.ndarray, dets: list[Detection], target_class: str | None = No
 
 
 def open_camera(index: int | None = None) -> cv2.VideoCapture:
+    """Open the webcam at the configured resolution and apply config.CAMERA_CONTROLS (brightness etc.)."""
+    import camera_controls
+
     index = config.WEBCAM_INDEX if index is None else index
     cap = cv2.VideoCapture(index)
+    camera_controls.apply()
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
     if not cap.isOpened():
