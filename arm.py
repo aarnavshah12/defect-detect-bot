@@ -40,6 +40,7 @@ CLI (owner tools):
     python arm.py --read             print the arm's current (x, y, z) and servo angles
     python arm.py --home             move to config.HOME_XYZ_MM
     python arm.py --xyz X Y Z        move to a point (validated)
+    python arm.py --max-z X Y        find the highest Z the arm accepts at (X, Y): steps up 10 mm at a time
     python arm.py --jog              keyboard jog; stamp HOME / TABLE_Z / DROP; prints a config.py snippet
     python arm.py --jog --bootstrap  same, before config.py has reach limits: validates against the
                                      firmware's own envelope (50 <= radius <= 300 mm, 0 <= z <= 255) instead
@@ -363,8 +364,9 @@ class Arm:
             stuck = (pos is not None and self._last_pos is not None
                      and max(abs(pos[i] - self._last_pos[i]) for i in range(3)) <= 2)
             if stuck:
-                why = ("the arm did not move AT ALL (read-back unchanged) - is the 12 V power on and the arm's "
-                       "switch on? USB alone keeps the board talking but not the servos")
+                why = ("the arm did not move AT ALL (read-back unchanged): the firmware silently refused the "
+                       f"target ({ext * 100:.0f}% of full stretch; joint limits bite well before 100%), or - if it "
+                       "refuses EVERY move - the servos have no power (USB alone keeps the board talking)")
             else:
                 why = f"it needs {ext * 100:.0f}% of the arm's full stretch (likely out of reach)"
             self.log.error("arm: target (%.1f, %.1f, %.1f) NOT reached: read-back %s (err %s mm) after %.2fs -> "
@@ -452,6 +454,26 @@ def _probe(port: str) -> None:
             print(f"  {baud:6d} baud: read_xyz={pos} read_angles={ang}")
         except (ArmError, serial.SerialException) as e:
             print(f"  {baud:6d} baud: {e}")
+
+
+def _max_z(a: "Arm", x: float, y: float, start: float | None = None, step: float = 10.0) -> float | None:
+    """Step Z up from `start` (default: travel height) until the arm refuses; return the last accepted Z."""
+    lo, hi = config.require("REACH_Z_MM")
+    z = config.TRAVEL_Z_MM if start is None else start
+    best = None
+    a.rise()
+    while z <= min(hi, BOOTSTRAP_Z_MM[1]) + 1e-6:
+        try:
+            a.move_to(x, y, z, 800)
+            best = z
+            print(f"  z={z:.0f} ok")
+        except (UnsafeTarget, MoveRefused) as e:
+            print(f"  z={z:.0f} refused ({str(e).split(';')[0]})")
+            break
+        z += step
+    if best is not None:
+        a.move_to(x, y, best, 600)
+    return best
 
 
 def _getch(timeout: float = 0.05) -> str | None:
@@ -573,6 +595,7 @@ def main() -> None:
     ap.add_argument("--read", action="store_true")
     ap.add_argument("--home", action="store_true")
     ap.add_argument("--xyz", nargs=3, type=float, metavar=("X", "Y", "Z"))
+    ap.add_argument("--max-z", nargs=2, type=float, metavar=("X", "Y"), help="probe the highest reachable Z at (X, Y)")
     ap.add_argument("--jog", action="store_true")
     ap.add_argument("--bootstrap", action="store_true",
                     help="with --jog: use the firmware envelope when config.py reach limits are still None")
@@ -592,6 +615,8 @@ def main() -> None:
             print("at", a.home())
         if args.xyz:
             print("at", a.move_to(*args.xyz))
+        if args.max_z:
+            print("max reachable Z at (%.0f, %.0f): %s" % (args.max_z[0], args.max_z[1], _max_z(a, *args.max_z)))
         if args.jog:
             _jog(a)
 
