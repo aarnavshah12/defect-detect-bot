@@ -20,6 +20,8 @@ import runlog
 
 # BGR colours per class for drawing; target class is drawn thicker.
 _COLOURS = {
+    "Defect": (0, 0, 255),
+    "Good": (0, 200, 0),
     "red": (0, 0, 255),
     "green": (0, 200, 0),
     "blue": (255, 100, 0),
