@@ -31,8 +31,8 @@ class CalibrationMissing(FileNotFoundError):
 
 
 def save_calibration(H: np.ndarray, pixel_pts, arm_pts, path: str | None = None,
-                     frame_size: tuple[int, int] | None = None) -> None:
-    """Persist the homography plus the point pairs it came from (for auditing)."""
+                     frame_size: tuple[int, int] | None = None, **extra) -> None:
+    """Persist the homography plus the point pairs it came from (for auditing). `extra` fields are stored too."""
     path = path or config.CALIBRATION_PATH
     H = np.asarray(H, dtype=np.float64)
     if H.shape != (3, 3):
@@ -43,6 +43,7 @@ def save_calibration(H: np.ndarray, pixel_pts, arm_pts, path: str | None = None,
         "arm_pts": np.asarray(arm_pts, dtype=np.float64).reshape(-1, 2),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "frame_size": tuple(int(v) for v in (frame_size or (config.FRAME_WIDTH, config.FRAME_HEIGHT))),
+        **extra,
     }
     with open(path, "wb") as f:  # file object: numpy never appends ".npy" to the chosen path
         np.save(f, payload, allow_pickle=True)
@@ -81,6 +82,16 @@ def pixel_to_arm(px: float, py: float, H: np.ndarray | None = None) -> tuple[flo
     pt = np.array([[[float(px), float(py)]]], dtype=np.float64)
     out = cv2.perspectiveTransform(pt, H)
     return float(out[0, 0, 0]), float(out[0, 0, 1])
+
+
+def translate_homography(H: np.ndarray, dx: float, dy: float) -> np.ndarray:
+    """H' = T(dx, dy) . H : the same mapping shifted by a constant (dx, dy) mm in arm coordinates.
+
+    Used to fold a rig-measured constant offset (e.g. from the single hand placement that seeds a carry
+    calibration) into the homography itself, so it stays the ONLY pixel -> arm mapping.
+    """
+    T = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy], [0.0, 0.0, 1.0]])
+    return T @ np.asarray(H, dtype=np.float64)
 
 
 def _line_dist(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:

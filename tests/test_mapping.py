@@ -46,6 +46,19 @@ def test_save_load_extensionless_and_frame_size():
         raise AssertionError("expected frame-size mismatch")
 
 
+def test_translate_homography_shifts_by_constant():
+    px, arm = _synthetic_pairs()
+    H, _ = mapping.fit_homography(px, arm)
+    H2 = mapping.translate_homography(H, 4.0, -7.5)
+    for p in px:
+        x, y = mapping.pixel_to_arm(p[0], p[1], H)
+        x2, y2 = mapping.pixel_to_arm(p[0], p[1], H2)
+        assert abs(x2 - x - 4.0) < 1e-6 and abs(y2 - y + 7.5) < 1e-6
+    d = tempfile.mkdtemp(); p = os.path.join(d, "c.npy")
+    mapping.save_calibration(H2, px, arm, path=p, offset_correction=(4.0, -7.5))
+    assert tuple(mapping.load_calibration(p)["offset_correction"]) == (4.0, -7.5)
+
+
 def test_missing_raises():
     try:
         mapping.load_homography("/nonexistent/calibration.npy")
