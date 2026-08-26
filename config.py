@@ -60,7 +60,7 @@ MOVE_MS = 1000
 TABLE_Z_MM: float | None = 47.0  # measured with arm.py --jog, 2026-08-25
 # Blocks are 4x4 cm (Hiwonder kit). The cup grabs the TOP of a block sitting on the table, so the pick
 # height is TABLE_Z + BLOCK_HEIGHT - CUP_PRESS (the rubber cup squashes a few mm to seal).
-BLOCK_HEIGHT_MM = 40.0
+BLOCK_HEIGHT_MM = 50.0  # owner raised from 40 on 2026-08-25: pick 1 cm higher
 CUP_PRESS_MM = 5.0
 # Hover height above the pick / drop point (mm): the slow, vertical final approach.
 HOVER_OFFSET_MM = 40.0
