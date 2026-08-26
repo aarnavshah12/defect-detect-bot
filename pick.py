@@ -140,6 +140,7 @@ class PickLoop:
             return "done"
         target = max(candidates, key=lambda d: d.conf)
         x, y = mapping.pixel_to_arm(target.cx, target.cy, self.H)
+        x, y = x + config.PICK_OFFSET_MM[0], y + config.PICK_OFFSET_MM[1]  # (0, 0) unless a hole sits under the cup
         vis = self._annotate(frame, dets, target, x, y)
         path = runlog.save_frame(vis, f"cycle{n:03d}-target")
         self.log.info("target %s -> arm=(%.1f, %.1f) pick z=%.1f frame=%s", target, x, y, self.pick_z, path)

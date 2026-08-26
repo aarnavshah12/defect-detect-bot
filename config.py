@@ -67,6 +67,9 @@ TABLE_Z_MM: float | None = 47.0  # measured with arm.py --jog, 2026-08-25
 # height is TABLE_Z + BLOCK_HEIGHT - CUP_PRESS (the rubber cup squashes a few mm to seal).
 BLOCK_HEIGHT_MM = 42.0  # owner: 50 left the cup above the block (2026-08-26); 42 = 5 mm of cup press on a 40 mm block
 CUP_PRESS_MM = 5.0
+# Pick point offset from the detected block centre, in arm mm (x, y). Use when the defect (a drilled hole)
+# sits in the middle of the top face: a hole under the cup leaks the vacuum. (0, 0) = pick at the centre.
+PICK_OFFSET_MM = (0.0, 0.0)
 # Hover height above the pick / drop point (mm): the slow, vertical final approach.
 HOVER_OFFSET_MM = 40.0
 # ALL sideways travel happens at this absolute Z (mm). Must clear a 40 mm block on the table while the
@@ -85,7 +88,7 @@ REACH_Z_MM: tuple[float, float] | None = (47.0, 210.0)
 MIN_RADIUS_MM = 120.0
 
 # Suction settle times (s) from the plan's pick sequence.
-SUCTION_ON_PAUSE_S = 0.5
+SUCTION_ON_PAUSE_S = 1.0  # let the vacuum build before lifting (porous wood, holes under the cup)
 SUCTION_OFF_PAUSE_S = 0.3
 
 # --------------------------------------------------------------------------
