@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import time
 
 import cv2
 
@@ -46,6 +47,14 @@ class PickLoop:
         self.ignored: list[tuple[float, float]] = []  # pixel spots skipped for the rest of the session
         self.planned: list[tuple[float, float]] = []  # dry-run: spots already given a planned target
         self.picks = 0
+        # live status for the UI panel
+        self.state = "starting"
+        self.remaining = 0
+        self.others = 0
+        self.cycle_no = 0
+        self.t0 = time.time()
+        self.last_vis = None
+        self.last_event = ""
         self.table_z = config.require("TABLE_Z_MM")
         self.pick_z = self.table_z + config.BLOCK_HEIGHT_MM - config.CUP_PRESS_MM  # cup on the block's top
         self.hover = config.HOVER_OFFSET_MM
@@ -63,6 +72,29 @@ class PickLoop:
             self.log.info("det %s %s -> arm=(%.1f, %.1f)", tag, d, x, y)
         n = sum(detect.is_target(d, self.target_class) for d in dets)
         self.log.info("%s: %d detections, %d %s", tag, len(dets), n, self.target_class)
+
+    def _panel(self, vis):
+        """Draw the status panel (bottom-left) on a copy of vis."""
+        vis = vis.copy()
+        h, w = vis.shape[:2]
+        lines = [
+            (f"{self.target_class.upper()} LEFT: {self.remaining}", (80, 80, 255) if self.remaining else (80, 220, 80)),
+            (f"other blocks: {self.others}    picked: {self.picks}    skipped: {len(self.ignored)}", (230, 230, 230)),
+            (f"{'DRY RUN  ' if self.dry_run else ''}{self.state}", (0, 200, 255)),
+            (f"cycle {self.cycle_no}   {int(time.time() - self.t0)}s   {self.last_event}", (180, 180, 180)),
+        ]
+        ph = 34 * len(lines) + 20
+        cv2.rectangle(vis, (0, h - ph), (min(w, 760), h), (20, 20, 20), -1)
+        for i, (text, colour) in enumerate(lines):
+            cv2.putText(vis, text, (14, h - ph + 32 + 34 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.85 if i == 0 else 0.7,
+                        colour, 2)
+        return vis
+
+    def _render(self, state: str | None = None) -> None:
+        if state is not None:
+            self.state = state
+        if self.show and self.last_vis is not None:
+            self.show(self._panel(self.last_vis))
 
     def _annotate(self, frame, dets, target: detect.Detection | None, x: float | None, y: float | None):
         vis = detect.draw(frame, dets, self.target_class)
@@ -92,23 +124,28 @@ class PickLoop:
     # -- one cycle --------------------------------------------------------------
     def cycle(self, n: int) -> str:
         """Returns 'picked' | 'skipped' | 'done'."""
+        self.cycle_no = n
+        self._render("scanning")
         frame = self.grab()
         dets = self.det.detect(frame)
         self._log_detections(dets, f"cycle{n}")
         candidates = [d for d in dets if detect.is_target(d, self.target_class) and not self._is_ignored(d)]
+        self.remaining = len(candidates)
+        self.others = sum(not detect.is_target(d, self.target_class) for d in dets)
         if not candidates:
             self.log.info("no %s left to pick (%d ignored spots, %d planned) -> done",
                           self.target_class, len(self.ignored), len(self.planned))
-            if self.show:
-                self.show(self._annotate(frame, dets, None, None, None))
+            self.last_vis = self._annotate(frame, dets, None, None, None)
+            self._render("DONE - table clear of " + self.target_class)
             return "done"
         target = max(candidates, key=lambda d: d.conf)
         x, y = mapping.pixel_to_arm(target.cx, target.cy, self.H)
         vis = self._annotate(frame, dets, target, x, y)
         path = runlog.save_frame(vis, f"cycle{n:03d}-target")
         self.log.info("target %s -> arm=(%.1f, %.1f) pick z=%.1f frame=%s", target, x, y, self.pick_z, path)
-        if self.show:
-            self.show(vis)
+        self.last_vis = vis
+        self.last_event = f"target {target.cls} {target.conf:.2f} -> ({x:.0f}, {y:.0f})"
+        self._render("moving to block")
 
         try:
             arm_mod.check_target(x, y, self.pick_z)
@@ -131,32 +168,43 @@ class PickLoop:
         try:
             # Sideways moves only at travel height; vertical moves only above the spot.
             a.move_to(x, y, tz)
+            self._render("descending")
             a.move_to(x, y, hover_z)
             a.move_to(x, y, self.pick_z, 700)  # slow final descent onto the block
+            self._render("suction on")
             a.suction(True)
             carrying = True
             a.wait(config.SUCTION_ON_PAUSE_S)
+            self._render("lifting")
             a.move_to(x, y, hover_z)
             a.move_to(x, y, tz)
             at_drop = True
+            self._render("carrying to bin")
             a.move_to(dx, dy, tz)                # clear of the pick spot before checking the lift
+            self._render("checking the lift")
             if not self.dry_run and self._lift_failed(target):
                 self.log.warning("lift failed at %s; releasing, ignoring this spot for the session", target)
+                self.last_event = "lift FAILED - spot skipped"
+                self._render("lift failed - releasing")
                 a.suction(False)
                 self.ignored.append(spot)
                 a.home()
                 return "skipped"
+            self._render("dropping")
             a.move_to(dx, dy, dz + self.hover)
             a.move_to(dx, dy, dz)
             a.suction(False)
             a.wait(config.SUCTION_OFF_PAUSE_S)
             a.move_to(dx, dy, dz + self.hover)
             a.move_to(dx, dy, tz)
+            self._render("homing")
             a.home()
         except arm_mod.MoveRefused as e:
             # The arm did not reach a target (silently refused by its IK, or stalled). Never continue
             # the sequence blind: set the block down if we can, vent, park, and do not retry the spot.
             self.log.error("move refused (%s); releasing, homing, ignoring spot %s", e, spot)
+            self.last_event = "move refused - spot skipped"
+            self._render("move refused - releasing")
             if carrying and not self.dry_run:
                 pos = a.read_xyz()
                 if pos is not None and _dist(pos, (x, y)) <= arm_mod.POSITION_TOLERANCE_MM and pos[2] > self.pick_z + 5:
@@ -172,7 +220,10 @@ class PickLoop:
                                        f"fix config.DROP_XYZ_MM") from e
             return "skipped"
         self.picks += 1
+        self.remaining = max(0, self.remaining - 1)
+        self.last_event = f"pick {self.picks} done"
         self.log.info("%s %d complete", "simulated pick" if self.dry_run else "pick", self.picks)
+        self._render("rescanning")
         return "picked"
 
     def run(self) -> int:
@@ -188,6 +239,9 @@ class PickLoop:
             self.log.warning("reached max cycles (%d); stopping", self.max_cycles)
         self.log.info("finished: %d %s, %d ignored spots", self.picks,
                       "simulated picks" if self.dry_run else "picks", len(self.ignored))
+        print(f"\n=== {'DRY RUN ' if self.dry_run else ''}FINISHED in {int(time.time() - self.t0)}s: "
+              f"{self.picks} {self.target_class} block(s) picked, {len(self.ignored)} skipped, "
+              f"{self.remaining} left ===")
         return self.picks
 
 
@@ -265,8 +319,8 @@ def main() -> None:
         loop = PickLoop(det, a, lambda: detect.grab(cap), H, target_class=args.target_class,
                         dry_run=args.dry_run, once=args.once, max_cycles=args.max_cycles, show=show)
         loop.run()
-        if show and args.dry_run:
-            log.info("dry-run finished; press any key in the window to close")
+        if show:
+            log.info("finished; press any key in the window to close")
             cv2.waitKey(0)
     finally:
         try:
