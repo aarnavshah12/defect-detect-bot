@@ -270,21 +270,33 @@ def _clipped(d, frame) -> bool:
     return x1 <= EDGE_MARGIN_PX or y1 <= EDGE_MARGIN_PX or x2 >= w - EDGE_MARGIN_PX or y2 >= h - EDGE_MARGIN_PX
 
 
-def _steady_detection(grab, detector, target_class, arm, log, k):
-    """Two looks 0.5 s apart must agree (rejects a hand in the shot). Returns (best, frame, dets) or None."""
+CALIB_CONFIDENCE = 0.25  # only one block is on the table during calibration, so a low cut-off is safe
+
+
+def _steady_detection(grab, detector, target_class, arm, log, k, quiet=False):
+    """Three looks; any two within 25 px agree (rejects a hand in the shot). Returns (best, frame, dets) or None.
+
+    On failure logs what the camera did see (raw boxes, and which were dropped as clipped) and saves the frame.
+    """
     import detect as detect_mod
-    for attempt in range(4):
+    looks = []
+    for attempt in range(3):
         frame = grab()
-        dets = [d for d in detector.detect(frame) if detect_mod.is_target(d, target_class) and not _clipped(d, frame)]
+        raw = detector.detect(frame)
+        ok = [d for d in raw if detect_mod.is_target(d, target_class) and not _clipped(d, frame)]
+        looks.append((frame, raw, ok))
+        for (f1, _, d1) in looks[:-1]:
+            if d1 and ok:
+                b1, b2 = max(d1, key=lambda d: d.conf), max(ok, key=lambda d: d.conf)
+                if math.hypot(b1.cx - b2.cx, b1.cy - b2.cy) <= 25:
+                    return b2, frame, ok
         arm.wait(0.5)
-        frame2 = grab()
-        dets2 = [d for d in detector.detect(frame2) if detect_mod.is_target(d, target_class) and not _clipped(d, frame2)]
-        if dets and dets2:
-            b1, b2 = max(dets, key=lambda d: d.conf), max(dets2, key=lambda d: d.conf)
-            if math.hypot(b1.cx - b2.cx, b1.cy - b2.cy) <= 15:
-                return b2, frame2, dets2
-        log.warning("point %d: block not seen steadily (attempt %d) - keep hands out of the picture", k, attempt + 1)
-        arm.wait(1.0)
+    if not quiet:
+        for i, (frame, raw, ok) in enumerate(looks):
+            desc = ", ".join(f"{d.cls} {d.conf:.2f} ({d.cx:.0f},{d.cy:.0f}) {d.w:.0f}x{d.h:.0f}"
+                             f"{' CLIPPED' if _clipped(d, frame) else ''}" for d in raw) or "nothing"
+            log.warning("point %d look %d saw: %s", k, i + 1, desc)
+        log.warning("point %d: saved %s", k, runlog.save_frame(looks[-1][0], f"calib-point{k:02d}-miss"))
     return None
 
 
@@ -326,7 +338,7 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
         go(x0, y0, travel_z)
         arm.home()
         arm.wait(1.0)
-        seen = _steady_detection(grab, detector, target_class, arm, log, 0)
+        seen = _steady_detection(grab, detector, target_class, arm, log, 0, quiet=True)  # "not seen" = lifted
         if seen is not None:
             arm.suction(False)
             arm.home()
@@ -427,7 +439,7 @@ def auto(camera: int, out_path: str, carry: bool = False) -> None:
     log = runlog.start_run("calibrate-auto")
     table_z = config.require("TABLE_Z_MM")
     arm_mod.check_target(*config.require("HOME_XYZ_MM"))
-    det = detect.Detector(roi=None)
+    det = detect.Detector(roi=None, confidence=CALIB_CONFIDENCE)
     cap = detect.open_camera(camera)
     frame_wh = None
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
@@ -478,7 +490,9 @@ def auto(camera: int, out_path: str, carry: bool = False) -> None:
     log.info("saved %s pairs=%d frame=%s", out_path, len(pixel_pts), frame_wh)
     print(f"Saved {out_path}")
     _, res = mapping.fit_homography(pixel_pts, arm_pts)
-    print(f"  fit error (expected pick-time error): max {res.max():.1f} mm, rms {float((res ** 2).mean() ** 0.5):.1f} mm")
+    print(f"  FIT ERROR = expected pick-time error: rms {float((res ** 2).mean() ** 0.5):.1f} mm, max {res.max():.1f} mm "
+          f"over {len(pixel_pts)} points  (a suction cup on a 40 mm block tolerates ~10 mm)")
+    print("  per-point leave-one-out check (includes that point's own placement noise; only the SUSPECT line matters):")
     for line in mapping.describe_residuals(pixel_pts, arm_pts):
         print(line)
     if len(pixel_pts) < mapping.RECOMMENDED_PAIRS:
