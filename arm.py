@@ -411,10 +411,26 @@ class Arm:
             self.log.info("arm: suction ON (pump on)")
             self._send(nozzle_frame(NOZZLE_PUMP_ON))
         else:
-            self.log.info("arm: suction OFF (pump off + valve open, then valve close)")
+            self.log.info("arm: suction OFF (pump off + valve open %.1fs, then valve close)", config.VENT_S)
             self._send(nozzle_frame(NOZZLE_PUMP_OFF_VALVE_OPEN))
-            self.wait(0.2)  # docs: venting is very short
+            self.wait(config.VENT_S)
             self._send(nozzle_frame(NOZZLE_VALVE_CLOSE))
+
+    def vent(self) -> None:
+        """Pump off + valve OPEN, and leave it open (call valve_close() later, e.g. after lifting away)."""
+        if self.dry_run:
+            self.log.info("[dry-run] arm: vent")
+            return
+        self.confirm_workspace_clear()
+        self.log.info("arm: vent (pump off + valve open)")
+        self._send(nozzle_frame(NOZZLE_PUMP_OFF_VALVE_OPEN))
+
+    def valve_close(self) -> None:
+        if self.dry_run:
+            self.log.info("[dry-run] arm: valve close")
+            return
+        self.log.info("arm: valve close")
+        self._send(nozzle_frame(NOZZLE_VALVE_CLOSE))
 
     @staticmethod
     def wait(seconds: float) -> None:

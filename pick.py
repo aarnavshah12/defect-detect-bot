@@ -194,9 +194,11 @@ class PickLoop:
             self._render("dropping")
             a.move_to(dx, dy, dz + self.hover)
             a.move_to(dx, dy, dz)
-            a.suction(False)
-            a.wait(config.SUCTION_OFF_PAUSE_S)
+            a.vent()                             # valve stays OPEN while we lift away, so the cup lets go
+            a.wait(config.VENT_S)
             a.move_to(dx, dy, dz + self.hover)
+            a.valve_close()
+            a.wait(config.SUCTION_OFF_PAUSE_S)
             a.move_to(dx, dy, tz)
             self._render("homing")
             a.home()

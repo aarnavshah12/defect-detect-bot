@@ -51,6 +51,12 @@ class FakeArm:
     def suction(self, on):
         self.calls.append(("suction", on))
 
+    def vent(self):
+        self.calls.append(("suction", False))
+
+    def valve_close(self):
+        self.calls.append(("valve_close",))
+
     def home(self, ms=None):
         self.calls.append(("home",))
 

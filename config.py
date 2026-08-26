@@ -90,6 +90,9 @@ MIN_RADIUS_MM = 120.0
 # Suction settle times (s) from the plan's pick sequence.
 SUCTION_ON_PAUSE_S = 1.0  # let the vacuum build before lifting (porous wood, holes under the cup)
 SUCTION_OFF_PAUSE_S = 0.3
+# How long the vent valve stays open when releasing (s). Taped / smooth tops seal well and need longer
+# than the docs' 0.2 s or the block stays on the cup.
+VENT_S = 1.0
 
 # --------------------------------------------------------------------------
 # Calibration / logging
