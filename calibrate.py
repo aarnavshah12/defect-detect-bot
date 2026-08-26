@@ -308,9 +308,13 @@ def verify(camera: int, path: str) -> None:
 # camera cannot see are skipped; at least mapping.MIN_PAIRS (ideally RECOMMENDED_PAIRS) must succeed.
 def _auto_grid():
     """config.CALIB_GRID minus spots near the bin, ordered farthest-from-bin first."""
+    import arm as arm_mod
+
     dx, dy = (config.DROP_XYZ_MM or (0.0, 0.0, 0.0))[:2]
+    pz = (config.TABLE_Z_MM + config.BLOCK_HEIGHT_MM - config.CUP_PRESS_MM) if config.TABLE_Z_MM is not None else 90.0
     pts = [(x, y) for x, y in config.CALIB_GRID if math.hypot(x - dx, y - dy) >= config.DROP_KEEPOUT_MM]
-    return sorted(pts, key=lambda p: -math.hypot(p[0] - dx, p[1] - dy))
+    # comfortably reachable spots first (the first one seeds the whole run), farthest from the bin first
+    return sorted(pts, key=lambda p: (arm_mod.extension_ratio(p[0], p[1], pz) > 0.8, -math.hypot(p[0] - dx, p[1] - dy)))
 
 
 AUTO_GRID = _auto_grid()
