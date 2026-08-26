@@ -76,7 +76,7 @@ HOVER_OFFSET_MM = 40.0
 # cup is carrying another 40 mm block: table Z + 40 + 40 + margin. Owner can raise it if blocks are taller.
 TRAVEL_Z_MM = 160.0
 # Owner-provided: drop zone end-effector position (mm).
-DROP_XYZ_MM: tuple[float, float, float] | None = (-220.0, 13.0, 200.0)  # high: blocks fall down a chute
+DROP_XYZ_MM: tuple[float, float, float] | None = (-220.0, 13.0, 185.0)  # chute drop; arm refuses 200 here (probed 2026-08-26, max 190)
 # Approach height above the drop pose. 0 = go straight to the drop pose and release (no hover step),
 # which frees reach for a high drop into a chute.
 DROP_HOVER_MM = 0.0  # verified reachable incl. hover, 2026-08-25
