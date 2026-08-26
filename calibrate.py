@@ -332,19 +332,31 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
         if answer == "q":
             arm.home()
             return pixel_pts, arm_pts
+        # Where is the block before the pick? (cup is 20 mm above it; usually still visible from the side)
+        pre = _steady_detection(grab, detector, target_class, arm, log, 0, quiet=True)
+        pre_px = (pre[0].cx, pre[0].cy) if pre else None
+        log.info("block before the pick: %s", f"pixel ({pre_px[0]:.0f},{pre_px[1]:.0f})" if pre_px else "not visible (cup in the way)")
         go(x0, y0, pick_z, 700)
         arm.suction(True)
         arm.wait(config.SUCTION_ON_PAUSE_S + 0.3)
         go(x0, y0, travel_z)
         arm.home()
         arm.wait(1.0)
-        seen = _steady_detection(grab, detector, target_class, arm, log, 0, quiet=True)  # "not seen" = lifted
-        if seen is not None:
-            arm.suction(False)
-            arm.home()
-            raise RuntimeError(f"the cup did not lift the block at pick height {pick_z:.0f} mm (the camera still "
-                               f"sees it on the table). Lower config.BLOCK_HEIGHT_MM or raise CUP_PRESS_MM, "
-                               f"then run again.")
+        after = _steady_detection(grab, detector, target_class, arm, log, 0, quiet=True)
+        if after is not None:
+            a_px = (after[0].cx, after[0].cy)
+            still_there = pre_px is not None and math.hypot(a_px[0] - pre_px[0], a_px[1] - pre_px[1]) <= 60
+            if still_there:
+                path = runlog.save_frame(after[1], "carry-lift-failed")
+                arm.suction(False)
+                arm.home()
+                raise RuntimeError(f"the cup did not lift the block: after the pick the camera still sees it at "
+                                   f"pixel ({a_px[0]:.0f},{a_px[1]:.0f}), where it was before. Pick height was "
+                                   f"{pick_z:.0f} mm (TABLE_Z {table_z:.0f} + BLOCK_HEIGHT {config.BLOCK_HEIGHT_MM:.0f} "
+                                   f"- CUP_PRESS {config.CUP_PRESS_MM:.0f}): lower BLOCK_HEIGHT_MM if the cup stopped "
+                                   f"above the block. Frame: {path}")
+            log.info("a block-sized detection at (%.0f,%.0f) after the pick is not at the pick spot (probably the "
+                     "block on the cup, seen at home) - continuing", a_px[0], a_px[1])
         log.info("block lifted; starting the %d-point carry calibration", len(points))
 
     for k, (x, y) in enumerate(points, 1):
