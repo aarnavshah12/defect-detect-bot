@@ -76,9 +76,9 @@ HOVER_OFFSET_MM = 40.0
 # cup is carrying another 40 mm block: table Z + 40 + 40 + margin. Owner can raise it if blocks are taller.
 TRAVEL_Z_MM = 160.0
 # Owner-provided: drop zone end-effector position (mm).
-DROP_XYZ_MM: tuple[float, float, float] | None = (-220.0, 13.0, 120.0)  # verified reachable incl. hover, 2026-08-25
+DROP_XYZ_MM: tuple[float, float, float] | None = (-220.0, 13.0, 140.0)  # verified reachable incl. hover, 2026-08-25
 # Owner-provided: home pose, out of camera view, clear of the pick area (mm).
-HOME_XYZ_MM: tuple[float, float, float] | None = (-210.0, -56.0, 139.0)
+HOME_XYZ_MM: tuple[float, float, float] | None = (-210.0, -56.0, 160.0)
 # Owner-provided: reach limits the arm may be sent to, (min, max) per axis in mm (envelope visited in --jog).
 REACH_X_MM: tuple[float, float] | None = (-269.0, 272.0)
 REACH_Y_MM: tuple[float, float] | None = (-256.0, 24.0)
