@@ -95,7 +95,7 @@ SUCTION_OFF_PAUSE_S = 0.3
 VENT_S = 1.0
 # When the arm sets a block down (calibration carry mode), release this much ABOVE the pick height so the
 # cup is not pressed into the block when it vents (a squashed cup drags the block back up).
-RELEASE_LIFT_MM = 32.0  # arm Z error grows near the base; this margin covers it
+RELEASE_LIFT_MM = 17.0  # high enough that the cup lets go, low enough that the block does not tumble
 
 # --------------------------------------------------------------------------
 # Calibration / logging
@@ -104,7 +104,8 @@ CALIBRATION_PATH = "calibration.npy"
 # Arm (x, y) mm spots for `calibrate.py --auto`. Keep them inside the camera's view: on 2026-08-25 the
 # view covered arm x from about -150 to +60 (x = +151 sat on the top edge and was clipped) and y down
 # to about -240. Spots the arm cannot reach are skipped automatically.
-CALIB_GRID = [(x, y) for y in (-120.0, -160.0, -200.0, -235.0) for x in (-150.0, -85.0, -20.0, 45.0)]
+# Nearest row kept >= 145 mm out: close to the base the arm's real height drifts and set-downs go wrong.
+CALIB_GRID = [(x, y) for y in (-145.0, -175.0, -205.0, -235.0) for x in (-150.0, -85.0, -20.0, 45.0)]
 # Calibration spots closer than this to DROP_XYZ_MM are skipped (the bin is there), and the run starts
 # at the spot farthest from the bin.
 DROP_KEEPOUT_MM = 170.0
