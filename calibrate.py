@@ -4,7 +4,10 @@
                                  click snaps to the detected block's bbox centre - the same quantity
                                  pick.py maps), jog the arm's suction cup onto the mark, type the arm
                                  (x, y) mm in the terminal. Writes calibration.npy.
-  python calibrate.py --auto     EASIEST: the arm drives itself to a grid of spots; at each one you slide
+  python calibrate.py --auto --carry  MOST ACCURATE: you centre the block under the cup once; the arm then
+                                 carries it to every grid spot itself, sets it down, lets the camera look,
+                                 and picks it back up. Hands-off.
+  python calibrate.py --auto     EASIER: the arm drives itself to a grid of spots; at each one you slide
                                  the block under the cup and press Enter; the arm moves away and the
                                  camera records the block. No jogging, no typing. Writes calibration.npy.
   python calibrate.py --verify   verify: click anywhere -> the arm hovers above that point at
@@ -254,69 +257,156 @@ def verify(camera: int, path: str) -> None:
 # camera cannot see are skipped; at least mapping.MIN_PAIRS (ideally RECOMMENDED_PAIRS) must succeed.
 AUTO_GRID = config.CALIB_GRID
 PRESENT_CLEARANCE_MM = config.BLOCK_HEIGHT_MM + 30.0  # cup height above table Z while you slide the block under it
+EDGE_MARGIN_PX = 8  # a box touching the frame edge is clipped: its centre is wrong
 
 
-def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: float, log, show=None):
+def _pick_z() -> float:
+    return config.TABLE_Z_MM + config.BLOCK_HEIGHT_MM - config.CUP_PRESS_MM
+
+
+def _clipped(d, frame) -> bool:
+    x1, y1, x2, y2 = d.bbox
+    h, w = frame.shape[:2]
+    return x1 <= EDGE_MARGIN_PX or y1 <= EDGE_MARGIN_PX or x2 >= w - EDGE_MARGIN_PX or y2 >= h - EDGE_MARGIN_PX
+
+
+def _steady_detection(grab, detector, target_class, arm, log, k):
+    """Two looks 0.5 s apart must agree (rejects a hand in the shot). Returns (best, frame, dets) or None."""
+    import detect as detect_mod
+    for attempt in range(4):
+        frame = grab()
+        dets = [d for d in detector.detect(frame) if detect_mod.is_target(d, target_class) and not _clipped(d, frame)]
+        arm.wait(0.5)
+        frame2 = grab()
+        dets2 = [d for d in detector.detect(frame2) if detect_mod.is_target(d, target_class) and not _clipped(d, frame2)]
+        if dets and dets2:
+            b1, b2 = max(dets, key=lambda d: d.conf), max(dets2, key=lambda d: d.conf)
+            if math.hypot(b1.cx - b2.cx, b1.cy - b2.cy) <= 15:
+                return b2, frame2, dets2
+        log.warning("point %d: block not seen steadily (attempt %d) - keep hands out of the picture", k, attempt + 1)
+        arm.wait(1.0)
+    return None
+
+
+def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: float, log, show=None,
+                 carry: bool = False):
     """Core of --auto, with injectable I/O so it can be tested offline.
 
-    For each (x, y): move the cup to (x, y, table_z + PRESENT_CLEARANCE_MM), ask the owner to slide the block
-    under it and press Enter (or 's' to skip), read the arm's real x,y, send the arm home (out of the camera's
-    view), grab a fresh frame, take the best `target_class` detection as the pixel. Returns (pixel_pts, arm_pts).
+    Manual (carry=False): for each (x, y) the cup stops above the spot, the owner slides the block under it and
+    presses Enter, the arm goes home, the camera records the block's bbox centre.
+
+    Carry (carry=True): the owner centres the block under the cup ONCE; the arm picks it up and, for each
+    (x, y), sets it down there, goes home, lets the camera record it, then picks it back up. Placement is then
+    the arm's repeatability, not a human's eye. A block that failed to lift is caught because the camera then
+    sees it at the previous spot.
     """
     pixel_pts, arm_pts = [], []
     present_z = table_z + PRESENT_CLEARANCE_MM
     travel_z = max(config.TRAVEL_Z_MM, present_z + 30.0)
+    pick_z = _pick_z()
+    what = "block" if target_class == "any" else f"{target_class} block"
+    unsafe, refused = arm_mod_unsafe(), arm_mod_refused()
+    last_pixel = None
+
+    def go(x, y, z, ms=None):
+        arm.move_to(x, y, z) if ms is None else arm.move_to(x, y, z, ms)
+
+    if carry:
+        x0, y0 = points[0]
+        go(x0, y0, travel_z)
+        go(x0, y0, pick_z + 20.0)
+        answer = ask(f"Centre the {what} under the cup - look straight down from above, take your time - "
+                     f"then press Enter (q = stop): ").strip().lower()
+        if answer == "q":
+            arm.home()
+            return pixel_pts, arm_pts
+        go(x0, y0, pick_z, 700)
+        arm.suction(True)
+        arm.wait(config.SUCTION_ON_PAUSE_S + 0.3)
+        go(x0, y0, travel_z)
+        arm.home()
+        arm.wait(1.0)
+        seen = _steady_detection(grab, detector, target_class, arm, log, 0)
+        if seen is not None:
+            arm.suction(False)
+            arm.home()
+            raise RuntimeError(f"the cup did not lift the block at pick height {pick_z:.0f} mm (the camera still "
+                               f"sees it on the table). Lower config.BLOCK_HEIGHT_MM or raise CUP_PRESS_MM, "
+                               f"then run again.")
+        log.info("block lifted; starting the %d-point carry calibration", len(points))
+
     for k, (x, y) in enumerate(points, 1):
         try:
-            arm.move_to(x, y, travel_z)
-            arm.move_to(x, y, present_z)
-        except (arm_mod_unsafe(), arm_mod_refused()) as e:
+            if carry:
+                go(x, y, travel_z)
+                go(x, y, pick_z + 20.0)
+                go(x, y, pick_z, 700)
+                arm.suction(False)
+                arm.wait(config.SUCTION_OFF_PAUSE_S)
+                go(x, y, pick_z + 20.0)
+                go(x, y, travel_z)
+            else:
+                go(x, y, travel_z)
+                go(x, y, present_z)
+        except (unsafe, refused) as e:
             log.warning("point %d (%.0f, %.0f) not reachable (%s) - skipped", k, x, y, e)
             arm.home()
             continue
-        what = "block" if target_class == "any" else f"{target_class} block"
-        answer = ask(f"Point {k}/{len(points)}: slide the {what} under the cup (centred under it), "
-                     f"then press Enter (s = skip, q = stop): ").strip().lower()
-        if answer == "q":
-            arm.home()
-            break
-        if answer == "s":
-            arm.home()
-            continue
-        real = arm.read_xyz()
-        ax, ay = (float(real[0]), float(real[1])) if real else (x, y)
-        arm.move_to(x, y, travel_z)
+        if not carry:
+            answer = ask(f"Point {k}/{len(points)}: slide the {what} under the cup (centred under it), "
+                         f"then press Enter (s = skip, q = stop): ").strip().lower()
+            if answer == "q":
+                arm.home()
+                break
+            if answer == "s":
+                arm.home()
+                continue
+            real = arm.read_xyz()
+            ax, ay = (float(real[0]), float(real[1])) if real else (x, y)
+            go(x, y, travel_z)
+        else:
+            ax, ay = float(x), float(y)
         arm.home()
         arm.wait(1.5)  # let the arm clear the view, the owner's hand leave, and the camera settle
-        import detect as detect_mod
-        best = None
-        for attempt in range(4):
-            # Two looks 0.5 s apart must agree: a hand still in the shot (or moving block) is rejected.
-            frame = grab()
-            dets = [d for d in detector.detect(frame) if detect_mod.is_target(d, target_class)]
-            arm.wait(0.5)
-            frame2 = grab()
-            dets2 = [d for d in detector.detect(frame2) if detect_mod.is_target(d, target_class)]
-            if dets and dets2:
-                b1, b2 = max(dets, key=lambda d: d.conf), max(dets2, key=lambda d: d.conf)
-                if math.hypot(b1.cx - b2.cx, b1.cy - b2.cy) <= 15:
-                    best = b2
-                    dets = dets2
-                    frame = frame2
-                    break
-            log.warning("point %d: block not seen steadily (attempt %d) - keep hands out of the picture", k, attempt + 1)
-            arm.wait(1.0)
-        if best is None:
+        seen = _steady_detection(grab, detector, target_class, arm, log, k)
+        if seen is None:
             log.warning("point %d: no %s seen steadily by the camera after the arm moved away - skipped "
                         "(is this spot in the camera's view? hands out?)", k, what)
             if show:
-                show(frame, [], None)
+                show(grab(), [], None)
+            if carry:
+                # the block should be at (x, y); try to pick it back up anyway
+                try:
+                    go(x, y, travel_z); go(x, y, pick_z + 20.0); go(x, y, pick_z, 700)
+                    arm.suction(True); arm.wait(config.SUCTION_ON_PAUSE_S + 0.3); go(x, y, travel_z)
+                except (unsafe, refused) as e:
+                    log.error("could not re-pick the block at (%.0f, %.0f): %s", x, y, e)
+                    arm.home()
+                    break
             continue
+        best, frame, dets = seen
+        if carry and last_pixel is not None and math.hypot(best.cx - last_pixel[0], best.cy - last_pixel[1]) <= 25:
+            log.error("point %d: the block is still where it was at the previous point - it was not picked up. "
+                      "Stopping; check suction / pick height.", k)
+            arm.home()
+            break
+        last_pixel = (best.cx, best.cy)
         pixel_pts.append((best.cx, best.cy))
         arm_pts.append((ax, ay))
         log.info("pair %d: pixel=(%.0f,%.0f) arm=(%.1f,%.1f) conf=%.2f", len(pixel_pts), best.cx, best.cy, ax, ay, best.conf)
         if show:
             show(frame, dets, best)
+        if carry and k < len(points):
+            try:
+                go(x, y, travel_z); go(x, y, pick_z + 20.0); go(x, y, pick_z, 700)
+                arm.suction(True); arm.wait(config.SUCTION_ON_PAUSE_S + 0.3); go(x, y, travel_z)
+            except (unsafe, refused) as e:
+                log.error("could not re-pick the block at (%.0f, %.0f): %s", x, y, e)
+                arm.home()
+                break
+    if carry:
+        arm.suction(False)
+    arm.home()
     return pixel_pts, arm_pts
 
 
@@ -330,7 +420,7 @@ def arm_mod_refused():
     return arm_mod.MoveRefused
 
 
-def auto(camera: int, out_path: str) -> None:
+def auto(camera: int, out_path: str, carry: bool = False) -> None:
     import arm as arm_mod
     import detect
 
@@ -357,14 +447,18 @@ def auto(camera: int, out_path: str) -> None:
 
     show(grab(), [], None)
     what = "block" if config.TARGET_CLASS == "any" else f"{config.TARGET_CLASS} block"
-    print(f"Auto calibration: {len(AUTO_GRID)} spots. Keep ONLY ONE {what} on the table (and nothing else "
-          f"block-sized in view). "
-          f"The arm will stop above each spot; slide the block under the cup and press Enter.")
+    if carry:
+        print(f"Carry calibration: {len(AUTO_GRID)} spots. ONE {what} on the table, nothing else block-sized in view. "
+              f"You centre the block under the cup once; the arm does the rest (about {len(AUTO_GRID) * 15} s).")
+    else:
+        print(f"Auto calibration: {len(AUTO_GRID)} spots. Keep ONLY ONE {what} on the table (and nothing else "
+              f"block-sized in view). The arm will stop above each spot; slide the block under the cup and press Enter.")
     a = arm_mod.Arm().connect()
     try:
         a.confirm_workspace_clear()
         a.home()
-        pixel_pts, arm_pts = auto_collect(AUTO_GRID, a, grab, det, input, config.TARGET_CLASS, table_z, log, show)
+        pixel_pts, arm_pts = auto_collect(AUTO_GRID, a, grab, det, input, config.TARGET_CLASS, table_z, log, show,
+                                          carry=carry)
     finally:
         try:
             a.home()
@@ -383,6 +477,8 @@ def auto(camera: int, out_path: str) -> None:
     mapping.save_calibration(H, pixel_pts, arm_pts, path=out_path, frame_size=frame_wh)
     log.info("saved %s pairs=%d frame=%s", out_path, len(pixel_pts), frame_wh)
     print(f"Saved {out_path}")
+    _, res = mapping.fit_homography(pixel_pts, arm_pts)
+    print(f"  fit error (expected pick-time error): max {res.max():.1f} mm, rms {float((res ** 2).mean() ** 0.5):.1f} mm")
     for line in mapping.describe_residuals(pixel_pts, arm_pts):
         print(line)
     if len(pixel_pts) < mapping.RECOMMENDED_PAIRS:
@@ -406,6 +502,7 @@ def check(path: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--auto", action="store_true", help="arm-driven calibration (easiest)")
+    ap.add_argument("--carry", action="store_true", help="with --auto: the arm places the block itself (most accurate)")
     ap.add_argument("--verify", action="store_true")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--no-snap", action="store_true", help="collect: use raw clicks, do not snap to detected blocks")
@@ -417,7 +514,7 @@ def main() -> None:
     if args.check:
         check(args.out)
     elif args.auto:
-        auto(camera, args.out)
+        auto(camera, args.out, carry=args.carry)
     elif args.verify:
         verify(camera, args.out)
     else:
