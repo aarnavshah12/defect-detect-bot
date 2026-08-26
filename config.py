@@ -93,6 +93,9 @@ SUCTION_OFF_PAUSE_S = 0.3
 # How long the vent valve stays open when releasing (s). Taped / smooth tops seal well and need longer
 # than the docs' 0.2 s or the block stays on the cup.
 VENT_S = 1.0
+# When the arm sets a block down (calibration carry mode), release this much ABOVE the pick height so the
+# cup is not pressed into the block when it vents (a squashed cup drags the block back up).
+RELEASE_LIFT_MM = 8.0
 
 # --------------------------------------------------------------------------
 # Calibration / logging

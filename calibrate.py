@@ -426,10 +426,10 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
             if carry:
                 go(x, y, travel_z)
                 go(x, y, pick_z + 20.0)
-                go(x, y, pick_z, 700)
-                arm.suction(False)
-                arm.wait(config.SUCTION_OFF_PAUSE_S)
-                go(x, y, pick_z + 20.0)
+                go(x, y, pick_z + config.RELEASE_LIFT_MM, 700)  # block just above the table, cup NOT pressed
+                _release(arm)
+                go(x, y, pick_z + 20.0)   # lift away with the valve still open
+                _valve_close(arm)
                 go(x, y, travel_z)
             else:
                 go(x, y, travel_z)
@@ -494,6 +494,20 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
         arm.suction(False)
     arm.home()
     return pixel_pts, arm_pts
+
+
+def _release(arm):
+    """Pump off + valve open, wait for the vacuum to vent (valve left open)."""
+    if hasattr(arm, "vent"):
+        arm.vent()
+    else:
+        arm.suction(False)
+    arm.wait(config.VENT_S)
+
+
+def _valve_close(arm):
+    if hasattr(arm, "valve_close"):
+        arm.valve_close()
 
 
 def arm_mod_unsafe():
