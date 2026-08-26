@@ -43,10 +43,11 @@ WEBCAM_INDEX = 0
 FRAME_WIDTH = 1920
 FRAME_HEIGHT = 1080
 # UVC controls applied every time the camera is opened (via tools/uvc-util; macOS ignores OpenCV's exposure
-# settings). This webcam has no exposure-time/gain control, but its "brightness" acts at sensor level:
-# 128 (default) blew out the block tops in a bright room; 112 keeps them textured (measured 2026-08-26).
+# settings). This webcam has no exposure-time/gain control. What actually lowers its exposure is
+# backlight-compensation=4 (auto-exposure meters for the bright blocks instead of the black mat: block-top
+# clipping 14% -> 2%); brightness is a post-sensor offset that only darkens. Measured 2026-08-26.
 CAMERA_UVC_NAME = "HD Web Camera"
-CAMERA_CONTROLS = {"brightness": 88, "contrast": 128, "backlight-compensation": 0, "auto-exposure-mode": 2}
+CAMERA_CONTROLS = {"backlight-compensation": 4, "brightness": 112, "contrast": 128, "auto-exposure-mode": 2}
 
 # --------------------------------------------------------------------------
 # Arm (Hiwonder MaxArm, ESP32 controller over USB serial)
