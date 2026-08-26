@@ -428,9 +428,8 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
                 go(x, y, pick_z + 20.0)
                 go(x, y, pick_z + config.RELEASE_LIFT_MM, 700)  # block just above the table, cup NOT pressed
                 _release(arm)
-                go(x, y, pick_z + 20.0)   # lift away with the valve still open
-                _valve_close(arm)
-                go(x, y, travel_z)
+                go(x, y, travel_z)        # straight up with the valve still OPEN: no vacuum can form even if
+                _valve_close(arm)         # the cup touches the block again on the way; close only when clear
             else:
                 go(x, y, travel_z)
                 go(x, y, present_z)

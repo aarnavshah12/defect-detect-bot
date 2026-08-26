@@ -194,12 +194,12 @@ class PickLoop:
             self._render("dropping")
             a.move_to(dx, dy, dz + self.hover)
             a.move_to(dx, dy, dz)
-            a.vent()                             # valve stays OPEN while we lift away, so the cup lets go
-            a.wait(config.VENT_S)
+            a.vent()                             # valve stays OPEN until the cup is fully clear: a pressed
+            a.wait(config.VENT_S)                # bellows cup with a closed valve re-grabs like a sucker
             a.move_to(dx, dy, dz + self.hover)
+            a.move_to(dx, dy, tz)
             a.valve_close()
             a.wait(config.SUCTION_OFF_PAUSE_S)
-            a.move_to(dx, dy, tz)
             self._render("homing")
             a.home()
         except arm_mod.MoveRefused as e:
