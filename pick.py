@@ -192,11 +192,11 @@ class PickLoop:
                 a.home()
                 return "skipped"
             self._render("dropping")
-            a.move_to(dx, dy, dz + self.hover)
+            if config.DROP_HOVER_MM > 0:
+                a.move_to(dx, dy, dz + config.DROP_HOVER_MM)
             a.move_to(dx, dy, dz)
             a.vent()                             # valve stays OPEN until the cup is fully clear: a pressed
             a.wait(config.VENT_S)                # bellows cup with a closed valve re-grabs like a sucker
-            a.move_to(dx, dy, dz + self.hover)
             a.move_to(dx, dy, tz)
             a.valve_close()
             a.wait(config.SUCTION_OFF_PAUSE_S)
@@ -265,7 +265,7 @@ def check_fixed_targets() -> None:
         raise SystemExit(f"config.TRAVEL_Z_MM={tz} is too low: needs >= TABLE_Z + 2 x BLOCK_HEIGHT + 10 = {min_travel:.0f}")
     pick_z = table_z + block - config.CUP_PRESS_MM
     for name, p in (("HOME_XYZ_MM", (hx, hy, hz)), ("DROP_XYZ_MM", (dx, dy, dz)),
-                    ("drop hover", (dx, dy, dz + hover)), ("drop travel", (dx, dy, tz))):
+                    ("drop hover", (dx, dy, dz + config.DROP_HOVER_MM)), ("drop travel", (dx, dy, tz))):
         ext = arm_mod.extension_ratio(*p)
         if ext > arm_mod.EXTENSION_WARN:
             log.warning("%s %s needs %.0f%% of the arm's full stretch; the firmware may refuse it - "
@@ -273,7 +273,7 @@ def check_fixed_targets() -> None:
     try:
         arm_mod.check_target(hx, hy, hz)
         arm_mod.check_target(dx, dy, dz)
-        arm_mod.check_target(dx, dy, dz + hover)
+        arm_mod.check_target(dx, dy, dz + config.DROP_HOVER_MM)
         arm_mod.check_target(dx, dy, tz)
         lo, hi = config.require("REACH_Z_MM")
         if not lo <= tz <= hi:
