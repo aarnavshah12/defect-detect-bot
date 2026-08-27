@@ -28,6 +28,11 @@ def _dist(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def inside_pick_area(x: float, y: float) -> bool:
+    bx, by = config.PICK_AREA_X_MM, config.PICK_AREA_Y_MM
+    return (bx is None or bx[0] <= x <= bx[1]) and (by is None or by[0] <= y <= by[1])
+
+
 class PickLoop:
     """The loop logic, separated from I/O so it can be unit-tested with fakes."""
 
@@ -150,8 +155,12 @@ class PickLoop:
 
         try:
             arm_mod.check_target(x, y, self.pick_z)
+            if not inside_pick_area(x, y):
+                raise arm_mod.UnsafeTarget(f"({x:.0f}, {y:.0f}) outside the calibrated pick area "
+                                           f"x{config.PICK_AREA_X_MM} y{config.PICK_AREA_Y_MM}")
         except arm_mod.UnsafeTarget as e:
-            self.log.warning("skip: target outside reach (%s); ignoring this spot for the session", e)
+            self.log.warning("skip: %s; ignoring this spot for the session", e)
+            self.last_event = "block outside pick area - skipped"
             self.ignored.append((target.cx, target.cy))
             return "skipped"
 

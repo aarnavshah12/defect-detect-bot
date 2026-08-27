@@ -79,6 +79,7 @@ def _setup():
     config.REACH_Y_MM = (-280.0, -80.0)
     config.REACH_Z_MM = (60.0, 250.0)
     config.MIN_RADIUS_MM = 120.0
+    config.PICK_AREA_X_MM = config.PICK_AREA_Y_MM = None  # whole reach box in tests
     config.DROP_HOVER_MM = 40.0  # tests were written with the hover step
     # pixel (px, py) -> arm: x = 0.25*px - 240, y = -0.25*py - 100   (pure scale/offset homography)
     return np.array([[0.25, 0, -240.0], [0, -0.25, -100.0], [0, 0, 1.0]])
@@ -228,6 +229,19 @@ def test_any_class_picks_block_sized_detection_of_any_colour():
     arm = FakeArm()
     loop = pick.PickLoop(det, arm, frame, H, target_class="any", max_cycles=10)
     assert loop.run() == 1
+
+
+def test_block_outside_pick_area_is_skipped():
+    H = _setup()
+    config.PICK_AREA_X_MM, config.PICK_AREA_Y_MM = (-100.0, 100.0), (-240.0, -150.0)
+    try:
+        far = Detection("red", 0.9, 400, 400, 90, 90)   # -> (-140, -200): x outside the pick area
+        near = Detection("red", 0.5, 800, 500, 90, 90)  # -> (-40, -225): inside
+        det = FakeDetector([[far, near], [far, near], [], [far]])
+        loop = pick.PickLoop(det, FakeArm(), frame, H, max_cycles=10)
+        assert loop.run() == 1 and loop.ignored == [(400, 400)]
+    finally:
+        config.PICK_AREA_X_MM = config.PICK_AREA_Y_MM = None
 
 
 def test_fixed_targets_validated_before_any_motion():

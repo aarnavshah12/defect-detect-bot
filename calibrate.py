@@ -427,6 +427,11 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
                 go(x, y, travel_z)
                 go(x, y, pick_z + 20.0)
                 go(x, y, pick_z + config.RELEASE_LIFT_MM, 700)  # block just above the table, cup NOT pressed
+                real = arm.read_xyz()  # where the arm ACTUALLY is (servo sag / IK error at long reach)
+                placed_xy = (float(real[0]), float(real[1])) if real else (float(x), float(y))
+                if real and math.hypot(real[0] - x, real[1] - y) > 4:
+                    log.info("point %d: arm at (%.0f, %.0f) vs commanded (%.0f, %.0f) - using the real position",
+                             k, real[0], real[1], x, y)
                 _release(arm)
                 go(x, y, travel_z)        # straight up with the valve still OPEN: no vacuum can form even if
                 _valve_close(arm)         # the cup touches the block again on the way; close only when clear
@@ -450,7 +455,7 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
             ax, ay = (float(real[0]), float(real[1])) if real else (x, y)
             go(x, y, travel_z)
         else:
-            ax, ay = float(x), float(y)
+            ax, ay = placed_xy
         arm.home()
         arm.wait(1.5)  # let the arm clear the view, the owner's hand leave, and the camera settle
         seen = _steady_detection(grab, detector, target_class, arm, log, k)
