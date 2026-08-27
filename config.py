@@ -89,8 +89,9 @@ REACH_Z_MM: tuple[float, float] | None = (47.0, 210.0)
 # Pick targets are only accepted inside this box (arm mm). Set to the area the calibration actually covers
 # and where the arm positions accurately; blocks outside are logged and skipped, never mis-picked.
 # 2026-08-26 evening: calibration is 1 mm inside x -85..45, y -205..-145; the arm is ~20 mm off beyond.
-PICK_AREA_X_MM: tuple[float, float] | None = (-115.0, 75.0)
-PICK_AREA_Y_MM: tuple[float, float] | None = (-235.0, -115.0)
+# Widened 2026-08-26 22:45 after verify showed the cup landing correctly out to x 123 / y -236.
+PICK_AREA_X_MM: tuple[float, float] | None = (-115.0, 145.0)
+PICK_AREA_Y_MM: tuple[float, float] | None = (-250.0, -100.0)
 # Never send the cup within this horizontal radius of the arm's own base (the base is in the camera's view
 # and can be detected as a block). The firmware refuses < 50 mm; the base structure is wider than that.
 MIN_RADIUS_MM = 120.0

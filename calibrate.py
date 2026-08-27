@@ -284,6 +284,10 @@ def verify(camera: int, path: str) -> None:
                 continue
             x, y = mapping.pixel_to_arm(px, py, H)
             log.info("verify pixel=(%.0f,%.0f) -> arm=(%.1f,%.1f) hover z=%.1f", px, py, x, y, hover_z)
+            import pick as pick_mod
+            if not pick_mod.inside_pick_area(x, y):
+                print(f"NOTE: ({x:.0f}, {y:.0f}) is outside config.PICK_AREA x{config.PICK_AREA_X_MM} "
+                      f"y{config.PICK_AREA_Y_MM} - pick.py would SKIP this block. Widen the area if the cup lands well here.")
             try:
                 a.rise()  # straight up from wherever the arm actually is, then sideways at travel height
                 a.move_to(x, y, config.TRAVEL_Z_MM)
