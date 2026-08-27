@@ -60,5 +60,6 @@ To measure them: `python arm.py --jog --bootstrap` (keyboard jog; `t` = table Z,
 | `arm.py` | MaxArm serial protocol wrapper: `connect`, `home`, `move_to`, `suction`, `wait`; safety envelope. |
 | `pick.py` | Main loop: `--dry-run`, `--once`, `--class`, `--zoom` (crop to the pick area), `--record demo.mp4` (record the overlay), `--countdown N`. |
 | `hud.py` | Demo overlay drawing (status bar, label tabs, target brackets, banner). |
+| `compose_demo.py` | Side-by-side demo video: a phone clip of the arm + the overlay rebuilt from the run log (`--offset` = sync). |
 | `runlog.py` | Timestamped per-run log + saved frames. |
 | `tests/` | Offline unit tests (no hardware). |
