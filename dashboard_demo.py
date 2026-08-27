@@ -160,17 +160,32 @@ def main() -> None:
         cv2.line(canvas, (0, STRIP_Y - 8), (W, STRIP_Y - 8), hud.VIOLET, 2)
         strip_h = H - STRIP_Y
         sch = cd.schematic(rep, size=(560, strip_h), view=view)
-        if Hinv is not None and path_pts and view:
+        pos, cur_path, prev_paths = cd.arm_trajectory(ev, t_log)
+        if Hinv is not None and pos is not None and view:
             x0, y0, x1, y1 = view
             s = min((560 - 24) / (x1 - x0), (strip_h - 70) / (y1 - y0))
             ox = int((560 - (x1 - x0) * s) / 2)
             oy = 50 + int((strip_h - 70 - (y1 - y0) * s) / 2)
-            pts = cv2.perspectiveTransform(np.array([[[px, py]] for px, py in path_pts], dtype=np.float64), Hinv).reshape(-1, 2)
-            pp = [(int((px - x0) * s) + ox, int((py - y0) * s) + oy) for px, py in pts]
+
+            def to_px(path):
+                if not path:
+                    return []
+                pts = cv2.perspectiveTransform(np.array([[[px, py]] for px, py in path], dtype=np.float64), Hinv).reshape(-1, 2)
+                return [(int((px - x0) * s) + ox, int((py - y0) * s) + oy) for px, py in pts]
+
+            for path in prev_paths:
+                pp = to_px(path)
+                for a, b in zip(pp[:-1], pp[1:]):
+                    cv2.line(sch, a, b, (90, 74, 60), 1, cv2.LINE_AA)
+            pp = to_px(cur_path)
             for a, b in zip(pp[:-1], pp[1:]):
                 cv2.line(sch, a, b, hud.AMBER, 2, cv2.LINE_AA)
-            cv2.circle(sch, pp[-1], 8, hud.AMBER, -1, cv2.LINE_AA)
-            hud._text(sch, "arm", (pp[-1][0] + 12, pp[-1][1] + 6), 0.5, hud.AMBER, 1)
+            cp = to_px([(pos[0], pos[1])])[0]
+            if pp:
+                cv2.line(sch, pp[-2] if len(pp) > 1 else pp[-1], cp, hud.AMBER, 2, cv2.LINE_AA)
+            cv2.circle(sch, cp, 8, hud.WHITE, -1, cv2.LINE_AA)
+            cv2.circle(sch, cp, 8, hud.AMBER, 2, cv2.LINE_AA)
+            hud._text(sch, f"arm z{pos[2]:.0f}", (cp[0] + 12, cp[1] + 6), 0.5, hud.AMBER, 1)
         canvas[STRIP_Y:H, 0:560] = sch
         # table
         tx = 590

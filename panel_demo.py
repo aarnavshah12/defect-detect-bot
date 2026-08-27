@@ -22,8 +22,8 @@ import hud
 REMOVED_FLASH_S = 1.6
 
 
-def arm_path_plot(img, x, y, w, h, moves, t_log):
-    """Top view in arm coordinates: bin, home, pick area, commanded path (last moves) and the current target."""
+def arm_path_plot(img, x, y, w, h, events, t_log):
+    """Top view in arm coordinates: bin, home, pick area, the cup (interpolated) and its path this cycle."""
     cv2.rectangle(img, (x, y), (x + w, y + h), (44, 34, 28), -1)
     hud._text(img, "arm path (top view, mm)", (x + 14, y + 26), 0.5, hud.GRAY, 1)
     xs = [config.DROP_XYZ_MM[0], config.HOME_XYZ_MM[0], config.PICK_AREA_X_MM[0], config.PICK_AREA_X_MM[1]]
@@ -34,22 +34,32 @@ def arm_path_plot(img, x, y, w, h, moves, t_log):
     def P(ax, ay):  # arm +x -> right, arm -y (forward, away from base) -> up
         return int(x + 15 + (ax - x0) * s), int(y + h - 12 - (ay - y0) * s)
 
-    a, b = P(config.PICK_AREA_X_MM[0], config.PICK_AREA_Y_MM[0]), P(config.PICK_AREA_X_MM[1], config.PICK_AREA_Y_MM[1])
-    cv2.rectangle(img, a, b, (80, 64, 56), 1)
+    cv2.rectangle(img, P(config.PICK_AREA_X_MM[0], config.PICK_AREA_Y_MM[0]), P(config.PICK_AREA_X_MM[1], config.PICK_AREA_Y_MM[1]), (80, 64, 56), 1)
     cv2.circle(img, P(0, 0), 7, hud.GRAY, 1)
     hud._text(img, "base", (P(0, 0)[0] + 10, P(0, 0)[1] + 5), 0.42, hud.GRAY, 1)
-    cv2.rectangle(img, (P(config.DROP_XYZ_MM[0], config.DROP_XYZ_MM[1])[0] - 12, P(config.DROP_XYZ_MM[0], config.DROP_XYZ_MM[1])[1] - 12),
-                  (P(config.DROP_XYZ_MM[0], config.DROP_XYZ_MM[1])[0] + 12, P(config.DROP_XYZ_MM[0], config.DROP_XYZ_MM[1])[1] + 12), hud.GREEN, 2)
-    hud._text(img, "bin", (P(config.DROP_XYZ_MM[0], config.DROP_XYZ_MM[1])[0] + 16, P(config.DROP_XYZ_MM[0], config.DROP_XYZ_MM[1])[1] + 5), 0.42, hud.GREEN, 1)
+    bp = P(config.DROP_XYZ_MM[0], config.DROP_XYZ_MM[1])
+    cv2.rectangle(img, (bp[0] - 12, bp[1] - 12), (bp[0] + 12, bp[1] + 12), hud.GREEN, 2)
+    hud._text(img, "bin", (bp[0] + 16, bp[1] + 5), 0.42, hud.GREEN, 1)
     hp = P(config.HOME_XYZ_MM[0], config.HOME_XYZ_MM[1])
     cv2.drawMarker(img, hp, hud.GRAY, cv2.MARKER_DIAMOND, 14, 1)
     hud._text(img, "home", (hp[0] + 10, hp[1] + 5), 0.42, hud.GRAY, 1)
-    recent = [(tt, d) for tt, d in moves if tt <= t_log][-8:]
-    pts = [P(d["x"], d["y"]) for tt, d in recent]
-    for i, (p1, p2) in enumerate(zip(pts[:-1], pts[1:])):
+    pos, current, previous = cd.arm_trajectory(events, t_log)
+    for path in previous:  # earlier cycles: faint
+        pts = [P(px, py) for px, py in path]
+        for p1, p2 in zip(pts[:-1], pts[1:]):
+            cv2.line(img, p1, p2, (90, 74, 60), 1, cv2.LINE_AA)
+    pts = [P(px, py) for px, py in current]
+    for p1, p2 in zip(pts[:-1], pts[1:]):
         cv2.line(img, p1, p2, hud.AMBER, 2, cv2.LINE_AA)
-    if pts:
-        cv2.circle(img, pts[-1], 7, hud.AMBER, -1, cv2.LINE_AA)
+    for pt in pts:
+        cv2.circle(img, pt, 3, hud.AMBER, -1, cv2.LINE_AA)
+    if pos is not None:
+        cp = P(pos[0], pos[1])
+        if pts:
+            cv2.line(img, pts[-1] if len(pts) == 1 else pts[-2], cp, hud.AMBER, 2, cv2.LINE_AA)
+        cv2.circle(img, cp, 9, hud.WHITE, -1, cv2.LINE_AA)
+        cv2.circle(img, cp, 9, hud.AMBER, 2, cv2.LINE_AA)
+        hud._text(img, f"z {pos[2]:.0f}", (cp[0] + 12, cp[1] - 8), 0.42, hud.WHITE, 1)
 
 
 def card(img, x, y, w, h, label, value, colour=hud.WHITE, sub="", big=1.9):
@@ -135,7 +145,7 @@ def main() -> None:
         hud._text(img, state_txt, (40, y2 + sh + 10), 0.9, hud.WHITE, 2)
         hud._text(img, f"{rep.event}", (20, y2 + sh + 58), 0.55, hud.GRAY, 1)
         hud._text(img, f"{int(max(0, t_log)):3d} s   frame {i:04d}", (20, H - 16), 0.5, hud.GRAY, 1)
-        arm_path_plot(img, 20 + cw + gap, y2, cw, H - y2 - 20, moves, t_log)
+        arm_path_plot(img, 20 + cw + gap, y2, cw, H - y2 - 20, ev, t_log)
         out.write(img)
     out.release()
     print(f"wrote {args.out} ({W}x{H}, {args.duration:.0f}s @ {args.fps:.0f} fps) and {args.out}.title.png")

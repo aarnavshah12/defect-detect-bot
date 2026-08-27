@@ -166,6 +166,37 @@ def schematic(rep: Replay, size=(640, 720), view=None):
     return img
 
 
+def arm_trajectory(events, t_log):
+    """Where the cup is at log time t (interpolated along the current move) and the paths so far.
+
+    Returns (pos_xyz, current_cycle_path, previous_paths): pos is interpolated between the previous target and
+    the current target over the commanded duration; paths are lists of (x, y) targets, split at each scan.
+    """
+    moves = [(tt, d) for tt, k, d in events if k == "move" and tt <= t_log]
+    scans = [tt for tt, k, d in events if k == "scan" and tt <= t_log]
+    if not moves:
+        return None, [], []
+    # position: interpolate along the latest move
+    (t_cur, cur) = moves[-1]
+    prev = moves[-2][1] if len(moves) > 1 else cur
+    frac = min(1.0, max(0.0, (t_log - t_cur) / max(0.05, cur["ms"] / 1000.0)))
+    pos = tuple(prev[a] + (cur[a] - prev[a]) * frac for a in ("x", "y", "z"))
+    # paths split by scan time
+    bounds = scans + [float("inf")]
+    cycles, ci = [[] for _ in bounds], 0
+    for tt, d in moves:
+        while ci + 1 < len(bounds) and tt >= bounds[ci]:
+            ci += 1
+        cycles[ci].append((d["x"], d["y"]))
+    cycles = [c for c in cycles if c]
+    # each cycle's path starts where the previous one ended (home), so the trail is continuous
+    for k in range(1, len(cycles)):
+        cycles[k] = [cycles[k - 1][-1]] + cycles[k]
+    current = cycles[-1] if cycles else []
+    previous = cycles[:-1]
+    return pos, current, previous
+
+
 def detection_extent(events, margin=90):
     """Bounding box (frame px) of every logged detection, so the schematic can zoom to the action."""
     xs, ys = [], []
