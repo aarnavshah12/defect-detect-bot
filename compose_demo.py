@@ -216,7 +216,7 @@ def main() -> None:
     ap.add_argument("log")
     ap.add_argument("--offset", type=float, required=True, help="phone clip start, seconds after the log's first line")
     ap.add_argument("--out", default="Demo/composite.mp4")
-    ap.add_argument("--title", default="Autonomous defect sorting  -  RF-DETR on Roboflow + Hiwonder MaxArm")
+    ap.add_argument("--title", default="Autonomous defect detection with physical AI  -  RF-DETR on Roboflow + Hiwonder MaxArm")
     ap.add_argument("--target", default=config.TARGET_CLASS)
     args = ap.parse_args()
 

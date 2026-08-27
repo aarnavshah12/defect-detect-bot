@@ -77,7 +77,7 @@ def main() -> None:
     ap.add_argument("--out", default="Demo/dashboard.mp4")
     ap.add_argument("--every", type=int, default=2, help="run the model on every Nth phone frame")
     ap.add_argument("--target", default=config.TARGET_CLASS)
-    ap.add_argument("--title", default="AUTONOMOUS DEFECT SORTING")
+    ap.add_argument("--title", default="AUTONOMOUS DEFECT DETECTION WITH PHYSICAL AI")
     args = ap.parse_args()
 
     ev = cd.parse_log(args.log)

@@ -101,7 +101,7 @@ def main() -> None:
     ap.add_argument("--size", default="960x540", help="panel size WxH")
     ap.add_argument("--out", default="Demo/panel.mp4")
     ap.add_argument("--target", default=config.TARGET_CLASS)
-    ap.add_argument("--title", default="AUTONOMOUS DEFECT SORTING")
+    ap.add_argument("--title", default="AUTONOMOUS DEFECT DETECTION WITH PHYSICAL AI")
     ap.add_argument("--subtitle", default="RF-DETR on Roboflow  -  Hiwonder MaxArm  -  numbers from the run log")
     args = ap.parse_args()
     W, H = (int(v) for v in args.size.split("x"))
