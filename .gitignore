@@ -8,3 +8,8 @@ logs/
 .claude/settings.local.json
 dataset/
 Demo/
+ARTICLE-NOTES.md
+*.mp4
+*.mov
+*.MOV
+*.dets.npz
