@@ -1,9 +1,7 @@
-"""Block Picker configuration.
+"""All the physical and environment values for the rig, in one place.
 
-Every physical / environment value lives here and nowhere else.
-Values that are ``None`` are OWNER-PROVIDED and still TODO: any code path
-that needs one calls ``require(...)`` and fails loudly instead of guessing.
-See block-picker-plan.md -> "Owner-provided values".
+Anything still ``None`` has not been measured yet: code that needs it calls ``require(...)``
+and fails loudly instead of guessing. Measure values with `python arm.py --jog`.
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ import os
 # --------------------------------------------------------------------------
 # Trained model (workspace/model-slug). Version 1 confirmed on the dashboard
 # via the API on 2026-08-25 (project aarnavs-space/blocks-lllea-p7f2h, rfdetr-small).
-# Owner's defect model (project block-defects-9kz1n, version 2, rfdetr-large, classes Defect / Good),
+# Defect model (project block-defects-9kz1n, version 2, rfdetr-large, classes Defect / Good),
 # switched in 2026-08-26. The earlier placeholder was "aarnavs-space/blocks-lllea-p7f2h-1-rfdetr-small-t1".
 # `inference.get_model` accepts the slug as-is; do NOT append "/2".
 MODEL_ID = "aarnavs-space/block-defects-9kz1n-2-rfdetr-large-t1"
@@ -61,11 +59,11 @@ MOVE_TIMEOUT_S = 6.0  # maximum allowed move duration (+ settle); longer moves a
 # Default duration for a move (ms). Longer = gentler.
 MOVE_MS = 1000
 
-# Owner-provided (jogged 2026-08-25): arm Z (mm) where the suction cup just touches the table.
+# Measured with arm.py --jog (2026-08-25): arm Z (mm) where the suction cup just touches the table.
 TABLE_Z_MM: float | None = 47.0  # measured with arm.py --jog, 2026-08-25
 # Blocks are 4x4 cm (Hiwonder kit). The cup grabs the TOP of a block sitting on the table, so the pick
 # height is TABLE_Z + BLOCK_HEIGHT - CUP_PRESS (the rubber cup squashes a few mm to seal).
-BLOCK_HEIGHT_MM = 42.0  # owner: 50 left the cup above the block (2026-08-26); 42 = 5 mm of cup press on a 40 mm block
+BLOCK_HEIGHT_MM = 42.0  # 50 left the cup hovering above the block; 42 = 5 mm of cup press on a 40 mm block
 CUP_PRESS_MM = 5.0
 # Pick point offset from the detected block centre, in arm mm (x, y). Use when the defect (a drilled hole)
 # sits in the middle of the top face: a hole under the cup leaks the vacuum. (0, 0) = pick at the centre.
@@ -73,16 +71,16 @@ PICK_OFFSET_MM = (0.0, 0.0)
 # Hover height above the pick / drop point (mm): the slow, vertical final approach.
 HOVER_OFFSET_MM = 40.0
 # ALL sideways travel happens at this absolute Z (mm). Must clear a 40 mm block on the table while the
-# cup is carrying another 40 mm block: table Z + 40 + 40 + margin. Owner can raise it if blocks are taller.
+# cup is carrying another 40 mm block: table Z + 40 + 40 + margin. Raise it for taller blocks.
 TRAVEL_Z_MM = 160.0
-# Owner-provided: drop zone end-effector position (mm).
+# Drop zone end-effector position (mm).
 DROP_XYZ_MM: tuple[float, float, float] | None = (-220.0, 13.0, 185.0)  # chute drop; arm refuses 200 here (probed 2026-08-26, max 190)
 # Approach height above the drop pose. 0 = go straight to the drop pose and release (no hover step),
 # which frees reach for a high drop into a chute.
 DROP_HOVER_MM = 0.0  # verified reachable incl. hover, 2026-08-25
-# Owner-provided: home pose, out of camera view, clear of the pick area (mm).
+# Home pose, out of camera view, clear of the pick area (mm).
 HOME_XYZ_MM: tuple[float, float, float] | None = (-210.0, -56.0, 190.0)
-# Owner-provided: reach limits the arm may be sent to, (min, max) per axis in mm (envelope visited in --jog).
+# Reach limits the arm may be sent to, (min, max) per axis in mm (the envelope visited in --jog).
 REACH_X_MM: tuple[float, float] | None = (-269.0, 272.0)
 REACH_Y_MM: tuple[float, float] | None = (-256.0, 24.0)
 REACH_Z_MM: tuple[float, float] | None = (47.0, 210.0)
@@ -124,7 +122,7 @@ LIFT_FAIL_RADIUS_PX = 10.0
 
 
 class ConfigError(RuntimeError):
-    """A required owner-provided value is still TODO."""
+    """A required measured value is not set yet."""
 
 
 def require(name: str):
@@ -132,31 +130,29 @@ def require(name: str):
     value = globals().get(name)
     if value is None:
         raise ConfigError(
-            f"config.{name} is not set. This is an owner-provided value "
-            f"(see block-picker-plan.md, 'Owner-provided values'). Fill it in config.py."
+            f"config.{name} is not set - measure it on the rig (python arm.py --jog) and fill it in config.py."
         )
     return value
 
 
 def api_key() -> str:
-    """ROBOFLOW_API_KEY from the environment, else from .claude/settings.local.json (gitignored)."""
+    """ROBOFLOW_API_KEY from the environment, else from a gitignored .env file next to this script."""
     key = os.environ.get(API_KEY_ENV)
     if key:
         return key
-    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".claude", "settings.local.json")
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     try:
-        import json
-
-        with open(local) as f:
-            key = json.load(f).get("env", {}).get(API_KEY_ENV)
-    except (OSError, ValueError):
-        key = None
+        for line in open(env_path):
+            if line.strip().startswith(API_KEY_ENV + "="):
+                key = line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
     if key:
         return key
-    raise ConfigError(f"{API_KEY_ENV} is not set: export it, or put it under env.{API_KEY_ENV} in {local}")
+    raise ConfigError(f"{API_KEY_ENV} is not set: export it, or put {API_KEY_ENV}=... in {env_path}")
 
 
-def missing_owner_values() -> list[str]:
-    """Names of owner-provided values still unset (for status messages)."""
+def missing_values() -> list[str]:
+    """Names of measured values still unset (for status messages)."""
     names = ["TABLE_Z_MM", "DROP_XYZ_MM", "HOME_XYZ_MM", "REACH_X_MM", "REACH_Y_MM", "REACH_Z_MM"]
     return [n for n in names if globals().get(n) is None]

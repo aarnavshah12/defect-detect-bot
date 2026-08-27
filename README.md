@@ -1,68 +1,66 @@
-# Block Picker
+# Defect-detect bot
 
-Overhead webcam + Roboflow RF-DETR detector (run locally) + Hiwonder MaxArm. The arm picks every
-`red` block it can see and drops it in a fixed drop zone. Plan: `block-picker-plan.md`. Status: `PROGRESS.md`.
+An overhead webcam, an RF-DETR model trained on [Roboflow](https://roboflow.com) (running locally), and a
+Hiwonder MaxArm. It spots defective wood blocks (drilled holes, scratches), suction-picks them, drops them
+down a chute, and rescans until the table is clean. Good blocks stay where they are.
+
+Pipeline: `webcam -> RF-DETR (Defect/Good) -> homography (pixels -> arm mm) -> MaxArm -> suction -> bin`.
+The arm's own firmware does the inverse kinematics; this code only ever sends end-effector (x, y, z) and
+suction on/off over USB serial.
 
 ## Setup
 
 ```bash
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python opencv-python numpy inference pyserial
-export ROBOFLOW_API_KEY=...          # never commit it
+echo "ROBOFLOW_API_KEY=..." > .env
 .venv/bin/python tests/test_mapping.py && .venv/bin/python tests/test_arm_protocol.py && .venv/bin/python tests/test_pick.py
 ```
 
-All physical values live in `config.py`. Anything still `None` there is owner-provided and the
-scripts refuse to move the arm until it is filled in.
-To measure them: `python arm.py --jog --bootstrap` (keyboard jog; `t` = table Z, `k` = drop, `h` = home,
-`q` prints a `config.py` snippet).
+Every physical number lives in `config.py`. Anything still `None` hasn't been measured, and the scripts
+refuse to move the arm until it is. To measure: `python arm.py --jog --bootstrap` — drive the arm with the
+keyboard (`t` = table height, `k` = drop point, `h` = home, `q` prints a ready-to-paste config snippet).
 
-## Build gates (do them in this order)
+## Bring-up, in order
 
-1. **SDK recon** — `PROGRESS.md` (and `docs/maxarm-sdk-recon.md`) record the MaxArm serial protocol,
-   function codes, units and boot behaviour, validated on this arm. Owner confirms the ESP32 still runs
-   Hiwonder's `MaxArm_micropython_microUSB` firmware (micro-USB, 9600 baud), then: `python arm.py --probe`
-   and `python arm.py --read` (no motion; power the arm on ≥ 15 s first — it homes itself at boot).
-2. **Detection standalone** — mount the camera, then `python detect.py`. Gate: `red` boxes on real red
-   blocks, none on the mat. If small blocks are mislabelled, set `PICK_ROI` in `config.py` to the pick
-   area (see `PROGRESS.md`) and re-check. `python detect.py --image frame.jpg` tests a saved frame.
-3. **Calibration** (owner runs it) — 5–6 tape marks spread over the pick area (not in a line, one near
-   the edge). Put a block on a mark, `python calibrate.py`, click the block (the click snaps to the
-   detected block's centre — the same point the pick loop uses, so block height is accounted for), jog the
-   suction cup onto the mark (`python arm.py --jog` or the Hiwonder app), type its arm `x,y`. Repeat per
-   mark, `d` to fit. It prints leave-one-out errors per mark and names the suspect mark if one value was mistyped.
-   Writes `calibration.npy`. Then `python calibrate.py --verify`: click anywhere (or `b` for the best
-   detected block) and the arm hovers there. Gate: within ~5 mm on 3+ spots, one near the edge.
-   `python calibrate.py --check` re-prints the residuals. Move the camera → recalibrate.
-4. **Dry-run pick loop** — `python pick.py --dry-run`. Prints and draws a target for each visible red
-   block; reports "no red" on a clear table. Gate: owner eyeballs the drawn targets against the blocks.
-5. **Real pick loop** — `python pick.py --once`, then `python pick.py`. Gate: three consecutive
-   successful picks at different positions, no non-red block touched.
+1. **Arm** — `python arm.py --probe` (no motion; power the arm ≥ 15 s first, it homes itself at boot),
+   then `python arm.py --read`. The serial protocol is documented in `docs/maxarm-sdk-recon.md` — the
+   important part is that the firmware never acknowledges a move and silently ignores unreachable targets,
+   so every move is verified by reading the position back.
+2. **Camera** — `python detect.py` shows the live feed with boxes (`s` saves a frame). Camera exposure is
+   set automatically on open (see `camera_controls.py` — macOS ignores OpenCV's exposure API, so this talks
+   UVC directly via the bundled `tools/uvc-util`). `python capture.py` collects training frames.
+3. **Calibration** — one block on the table, then `python calibrate.py --auto --carry`: centre the block
+   under the cup once, and the arm carries it to a grid of spots by itself (~4 min, hands off). Then
+   `python calibrate.py --verify`: press `b` to hover over the best-detected block; if the cup is
+   consistently off-centre, nudge it with `w/a/s/d`, press `c` on 2–3 blocks, `x` to fold the offset into
+   the calibration. Move the camera or the arm base -> recalibrate.
+4. **Run** — `python pick.py --dry-run` (no motion), `python pick.py --once` (one pick), `python pick.py`
+   (until no defects remain). `--zoom` crops the window to the pick area, `--record demo.mp4` records the
+   overlay, `--countdown 5` gives you time to arrange windows before motion starts.
 
 ## Safety
 
-- `arm.py` refuses any target outside `REACH_*_MM` or below `TABLE_Z_MM` (raises, never sends), and treats a
-  move whose position read-back is missing or off by > 10 mm as refused (vent, home, skip that block).
-- The first real motion of a process asks `Workspace clear? [y/N]`. No default yes.
-- **Never leave `pick.py` running unattended**, even with `--once`. Stay within reach of the power switch.
-- `--dry-run` never writes to the serial port.
-- Every detection and every arm command is logged to `logs/<timestamp>.log`; the frame that triggered
-  each pick is saved next to it.
+- Targets outside the reach box, below table height, or within 120 mm of the arm's own base are refused
+  before a byte hits the serial port. Home/drop/travel poses are validated at start-up.
+- A move whose position read-back is missing or >10 mm off is treated as refused: vent, set the block down
+  if mid-carry, home, skip that block.
+- First motion of a session asks `Workspace clear? [y/N]`. No default yes. Don't run it unattended.
+- Every detection and every serial frame is logged to `logs/<timestamp>.log`, with the frame that triggered
+  each pick saved alongside — the demo videos are rendered from these logs.
 
 ## Files
 
-| File | Responsibility |
+| File | What it does |
 |---|---|
 | `config.py` | Every physical / environment value. |
-| `detect.py` | Model loaded once; `Detector.detect(frame) -> list[Detection]`; standalone live view. |
-| `calibrate.py` | Click-to-calibrate, verify mode, offline check. Writes `calibration.npy`. |
-| `mapping.py` | `load_homography()`, `pixel_to_arm(px, py)` via `cv2.perspectiveTransform`. |
-| `arm.py` | MaxArm serial protocol wrapper: `connect`, `home`, `move_to`, `suction`, `wait`; safety envelope. |
-| `pick.py` | Main loop: `--dry-run`, `--once`, `--class`, `--zoom` (crop to the pick area), `--record demo.mp4` (record the overlay), `--countdown N`. |
-| `hud.py` | Demo overlay drawing (status bar, label tabs, target brackets, banner). |
-| `compose_demo.py` | Side-by-side demo video: a phone clip of the arm + the overlay rebuilt from the run log (`--offset` = sync). |
-| `dashboard_demo.py` | Dashboard-style demo video: model boxes on the phone clip + live metrics/table/schematic from the run log. |
-| `panel_demo.py` | Stand-alone metrics panel video (black background) + title card, timed to a run log, for compositing in an editor. |
-| `rail_demo.py` | Vertical 640x1080 side rail (title, model view, cards, status, arm path) for the right third of a 1080p composite. |
-| `runlog.py` | Timestamped per-run log + saved frames. |
-| `tests/` | Offline unit tests (no hardware). |
+| `detect.py` | Model loaded once; `Detector.detect(frame) -> [Detection]`; live view; size filter + dedupe. |
+| `calibrate.py` | Self-calibration (`--auto --carry`), manual mode, verify + offset nudge, offline check. |
+| `mapping.py` | Homography fit/load, degeneracy checks, leave-one-out residuals, suspect-point finder. |
+| `arm.py` | MaxArm serial driver + safety envelope; `--jog`, `--probe`, `--max-z` reach probe. |
+| `pick.py` | The loop, with a live HUD. |
+| `camera_controls.py` | UVC camera controls (exposure) applied on every camera open. |
+| `capture.py` | Training-frame capture with the same camera settings the robot uses. |
+| `hud.py` + `compose_demo.py` / `dashboard_demo.py` / `panel_demo.py` / `rail_demo.py` | Demo-video tooling: overlays and analytics panels rendered/replayed from run logs. |
+| `runlog.py` | Timestamped per-run logging + saved frames. |
+| `tests/` | Offline unit tests (fake serial, fake detector, fake arm — no hardware needed). |

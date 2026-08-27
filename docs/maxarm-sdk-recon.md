@@ -1,5 +1,5 @@
 > **Resolution note (2026-08-25).** This report was produced from the public Hiwonder docs before the
-> owner's earlier project was found. The open questions in section (h) are resolved by the firmware
+> my earlier project was found. The open questions in section (h) are resolved by the firmware
 > source (`MaxArm_Serial_Communication.zip`) and by `~/Documents/connect 4 bot/maxarm.py`, which was
 > validated on this arm on 2026-08-17: the `MaxArm_micropython_microUSB` slave firmware **is installed**
 > (factory files backed up in that project); it opens `UART(1, 9600, tx=1, rx=3)` = the micro-USB port,
@@ -71,7 +71,7 @@ MicroPython slave firmware (`MaxArm_ctl.py` on the board), §10 lines 878-887 (v
 ```
 `SELECT_PORT.PORT_FOR_USB = const(0x01)`, `PORT_FOR_4Pin = const(0x03)` (§10, 901-903).
 
-Note: the shipped zip (`https://docs.hiwonder.com/projects/MaxArm/en/latest/_static/source_code/MaxArm_Serial_Communication.zip`, file `MaxArm_micropython_microUSB/MaxArm_ctl.py`) reportedly has `UART(1 , 9600 , tx=1, rx=3 )` for the USB branch, i.e. the USB-REPL pins — this differs from the doc page's `tx=10, rx=9`. **Unverified by me against the zip; owner should check the file actually on their board.**
+Note: the shipped zip (`https://docs.hiwonder.com/projects/MaxArm/en/latest/_static/source_code/MaxArm_Serial_Communication.zip`, file `MaxArm_micropython_microUSB/MaxArm_ctl.py`) reportedly has `UART(1 , 9600 , tx=1, rx=3 )` for the USB branch, i.e. the USB-REPL pins — this differs from the doc page's `tx=10, rx=9`. **Unverified against the zip; check the file actually on the board.**
 
 The §10 PC wiring section uses a USB-TTL adapter on the 4-pin header, not the micro-USB port: "Connect the RXD, TXD, GND of USB adapter to IO32, IO33, GND ports of ESP32 expansion board respectively using Dupont wires." (§10, 111). Ground must be shared and TX/RX crossed (§10, 157-159).
 
@@ -83,10 +83,10 @@ Master must use 9600: "initialize the serial baud rate to 9600, otherwise commun
 ### Port naming
 - Linux: `/dev/ttyUSB0` (§10, 2369).
 - Windows: `COMx`, identify by "CH340" in Device Manager; never `COM1` (§4 176, 210; §10 2721).
-- macOS: **not documented anywhere in the doc set.** The CH340 chip implies `/dev/cu.usbserial-*`/`/dev/cu.wchusbserial*`; the owner's earlier driver used `/dev/cu.usbserial-310` (`https://raw.githubusercontent.com/aarnavshah12/connect4-robot/HEAD/maxarm.py`). Inference, not doc-stated.
+- macOS: **not documented anywhere in the doc set.** The CH340 chip implies `/dev/cu.usbserial-*`/`/dev/cu.wchusbserial*`; my earlier driver used `/dev/cu.usbserial-310` (`https://raw.githubusercontent.com/aarnavshah12/connect4-robot/HEAD/maxarm.py`). Inference, not doc-stated.
 
 ### Boot behaviour (affects when the first command can be sent)
-MicroPython slave: on `begin()` it homes over 1500 ms then sleeps 2000 ms (§10, 886-887). The zip's `main.py` reportedly sleeps 10 s first ("Wait for 10s to prevent program download failure") then polls `rec_data()` every 100 ms (web hunt, zip `MaxArm_micropython_microUSB/main.py`; not in the doc text files — owner should verify). Factory `main.py` starts Bluetooth taking ~10 s (§4, 385).
+MicroPython slave: on `begin()` it homes over 1500 ms then sleeps 2000 ms (§10, 886-887). The zip's `main.py` reportedly sleeps 10 s first ("Wait for 10s to prevent program download failure") then polls `rec_data()` every 100 ms (web hunt, zip `MaxArm_micropython_microUSB/main.py`; not in the doc text files — verify on the board). Factory `main.py` starts Bluetooth taking ~10 s (§4, 385).
 
 ---
 
@@ -352,11 +352,11 @@ from BusServo import BusServo
 
 ---
 
-## (h) Open questions the OWNER must confirm on the physical kit
+## (h) Open questions to confirm on the physical kit
 
 1. **Which firmware is on the ESP32?** Factory firmware (BLE + handle receiver) does not implement the `AA 55` protocol; the `MaxArm_micropython_microUSB` slave files from the §10 zip must be loaded (web: connect4-robot `PROGRESS.md` / `maxarm_factory_backup/main.py`). Confirm by sending `AA 55 13 00 EC` at 9600 and checking for an 11-byte `AA 55 13 06 …` reply.
 2. **Which UART pins the loaded slave firmware uses** (`tx=10, rx=9` per doc page §10 881 vs `tx=1, rx=3` reportedly in the zip). If it is the micro-USB variant, plain USB works; if it is the 4-pin variant you need a USB-TTL adapter on IO32/IO33 (§10, 111).
-3. **macOS port name** — not documented; expect a CH340 `/dev/cu.usbserial-*` (owner's previous rig: `/dev/cu.usbserial-310`).
+3. **macOS port name** — not documented; expect a CH340 `/dev/cu.usbserial-*` (my previous rig: `/dev/cu.usbserial-310`).
 4. **Does opening the port reset the board?** Conflicting third-party reports; both agree there is a 10 s + ~3.5 s silent window after reset (web sources). Verify empirically how long until the first `read_xyz` answers.
 5. **Suction sub-command checksums** — the doc's `AA 55 07 01 02 f6` disagrees with the documented rule (which gives `F5`). Verify which byte the board accepts.
 6. **Reply checksum convention** (whole frame incl. header vs func/len/data) — verify one `read_xyz` reply by hand.
@@ -364,7 +364,7 @@ from BusServo import BusServo
 8. **z clamp** 225 vs 255 and whether the MicroPython firmware silently drops out-of-reach targets — verify with a `read_xyz` after a deliberately unreachable command.
 9. **`go_home()` default duration** in the MicroPython `espmax.py` (not printed in docs; zip reportedly `duration=2000`).
 10. **Servo-angle mapping** for `FUNC_SET_ANGLE` (Python master maps 0-180→0-1000, §10 2106; prose says 0-240°, §10 2391) — irrelevant if only XYZ is used.
-11. **Actual reachable workspace** for the defect-detect rig — the docs give no max radius; owner's prior taught points (`https://raw.githubusercontent.com/aarnavshah12/connect4-robot/HEAD/poses.json`) are the best evidence.
+11. **Actual reachable workspace** for the defect-detect rig — the docs give no max radius; my previously taught points (`https://raw.githubusercontent.com/aarnavshah12/connect4-robot/HEAD/poses.json`) are the best evidence.
 
 ---
 
@@ -378,5 +378,5 @@ from BusServo import BusServo
 6. **Completion:** no ack exists. Sleep `ms/1000 + settle`, then send `AA 55 13 00 EC`, read 11 bytes, unpack `<hhh` from bytes 4-9 and compare to the target with a tolerance of a few mm; treat mismatch as "refused/unreachable" (§10, 2865-2871, 205). Validate the reply checksum against both conventions (see (d)).
 7. **Startup:** after opening the port, poll `read_xyz` for up to ~25 s before the first move (slave homes on `begin()`: §10, 886-887; plus the zip's 10 s sleep per web hunt).
 8. Home first (`move_to(0, -163, 212, 2000)` or the value read back at boot), then **descend in z before moving in x/y** (§8, 282).
-9. Ready-made reference drivers that already do all of the above and were tested on real hardware: the owner's `connect4-robot/maxarm.py` (`https://raw.githubusercontent.com/aarnavshah12/connect4-robot/HEAD/maxarm.py`) and `https://github.com/Nu424/maxarm-python` (`pip install git+…`, `maxarmpy.MaxArm_ctl`). Either is a better starting point than the official `MaxArm_ctl.py` (set-vs-list bug, blocking 12-byte read, no timeout, no reply-checksum handling).
+9. Ready-made reference drivers that already do all of the above and were tested on real hardware: my `connect4-robot/maxarm.py` (`https://raw.githubusercontent.com/aarnavshah12/connect4-robot/HEAD/maxarm.py`) and `https://github.com/Nu424/maxarm-python` (`pip install git+…`, `maxarmpy.MaxArm_ctl`). Either is a better starting point than the official `MaxArm_ctl.py` (set-vs-list bug, blocking 12-byte read, no timeout, no reply-checksum handling).
 10. Fix in this project: any config with `BAUDRATE = 115200` for the PC link must become **9600** (§10, 120, 2361).

@@ -1,4 +1,4 @@
-"""Offline tests of calibrate.auto_collect (manual and carry modes) with fake arm / detector / owner."""
+"""Offline tests of calibrate.auto_collect (manual and carry modes) with a fake arm, detector and user."""
 import logging
 import os
 import sys
@@ -75,7 +75,7 @@ def test_manual_mode_builds_a_valid_calibration():
     answers = iter([""] * 2 + ["s"] + [""] * 20)  # skip the 3rd point by hand
 
     def ask(prompt):
-        arm.block = [arm.pos[0], arm.pos[1]]  # owner slides the block under the cup
+        arm.block = [arm.pos[0], arm.pos[1]]  # user slides the block under the cup
         return next(answers)
 
     px, ar = calibrate.auto_collect(calibrate.AUTO_GRID, arm, _frame, FakeDetector(arm), ask, "blue", 47.0,
@@ -94,7 +94,7 @@ def test_carry_mode_is_hands_off_after_the_first_placement():
 
     def ask(prompt):
         asks.append(prompt)
-        arm.block = [arm.pos[0], arm.pos[1]]  # owner centres the block under the cup once
+        arm.block = [arm.pos[0], arm.pos[1]]  # user centres the block under the cup once
         return ""
 
     px, ar = calibrate.auto_collect(calibrate.AUTO_GRID, arm, _frame, FakeDetector(arm), ask, "blue", 47.0,

@@ -13,3 +13,7 @@ ARTICLE-NOTES.md
 *.mov
 *.MOV
 *.dets.npz
+AGENTS.md
+PROGRESS.md
+block-picker-plan.md
+docs/NOTES.md

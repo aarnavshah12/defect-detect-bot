@@ -53,7 +53,7 @@ def load_calibration(path: str | None = None) -> dict:
     path = path or config.CALIBRATION_PATH
     if not os.path.exists(path):
         raise CalibrationMissing(
-            f"{path} not found. The owner must run `python calibrate.py` on the physical rig first."
+            f"{path} not found. Run `python calibrate.py` on the rig first."
         )
     data = np.load(path, allow_pickle=True).item()
     H = np.asarray(data["H"], dtype=np.float64)

@@ -2,10 +2,10 @@
 
     python pick.py --dry-run          no serial writes; logs a planned target for each visible block once
     python pick.py --once             one real pick, then stop
-    python pick.py                    loop until no `red` remain (owner must stay present)
+    python pick.py                    loop until no target blocks remain (stay next to the arm)
     python pick.py --class blue       pick a different class (default config.TARGET_CLASS)
 
-Real motion requires calibration.npy and all owner-provided values in config.py, and asks
+Real motion requires calibration.npy and all measured values in config.py, and asks
 "Workspace clear? [y/N]" before the first move. Never run unattended.
 """
 
@@ -345,10 +345,10 @@ def main() -> None:
     args = ap.parse_args()
 
     log = runlog.start_run("pick-dry" if args.dry_run else "pick")
-    missing = config.missing_owner_values()
+    missing = config.missing_values()
     if missing:
-        raise SystemExit(f"config.py still has owner-provided values unset: {missing}. "
-                         f"Fill them in (block-picker-plan.md, 'Owner-provided values') before running pick.py.")
+        raise SystemExit(f"config.py still has unset values: {missing}. "
+                         f"Measure them on the rig (python arm.py --jog) before running pick.py.")
     check_fixed_targets()
     cal = mapping.load_calibration()  # raises CalibrationMissing with instructions if absent
     H = cal["H"]
@@ -412,7 +412,7 @@ def main() -> None:
     finally:
         try:
             # Park only if motion was already authorised this session; never re-prompt from cleanup
-            # (the owner may have just declined or hit Ctrl-C at the prompt).
+            # (you may have just declined or hit Ctrl-C at the prompt).
             if not args.dry_run and a.cleared:
                 a.suction(False)
                 a.home()

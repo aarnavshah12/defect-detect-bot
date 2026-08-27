@@ -16,7 +16,7 @@ Reply frames are checksummed over the WHOLE frame including the 0xAA 0x55 header
 MaxArm_ctl.py: checksum_crc8(0, 0, send_data)); requests exclude the header. parse_frame()
 accepts both conventions.
 
-Hardware facts validated on this arm by the owner's connect-4 project (2026-08-17, see
+Hardware facts validated on this arm by my earlier connect-4 project (2026-08-17, see
 ~/Documents/connect 4 bot/maxarm.py): Hiwonder's MaxArm_micropython_microUSB slave firmware is
 installed (it opens UART(1, 9600, tx=1, rx=3), i.e. the USB port); a plain port open does NOT reset
 the board, only a DTR/RTS pulse does; after power-on/reset the firmware sleeps 10 s then homes
@@ -30,12 +30,12 @@ Motion commands have NO completion acknowledgement, so move_to() waits the comma
 
 Safety (enforced here, not in comments): every target must be inside config.REACH_* and Z must be
 >= config.TABLE_Z_MM, otherwise UnsafeTarget is raised (logged) and nothing is sent. The first real
-motion in a process requires the owner to answer "Workspace clear? [y/N]". connect() refuses to
+motion in a process asks "Workspace clear? [y/N]". connect() refuses to
 proceed if the arm never answers. The position read-back after a move is the protocol's only
 completion signal: if it is missing or off by more than POSITION_TOLERANCE_MM the move is treated
 as refused (the firmware silently ignores unreachable targets) and MoveRefused is raised.
 
-CLI (owner tools):
+CLI:
     python arm.py --probe            open the port, try read_xyz at 9600 and 115200, no motion
     python arm.py --read             print the arm's current (x, y, z) and servo angles
     python arm.py --home             move to config.HOME_XYZ_MM
@@ -163,7 +163,7 @@ BOOTSTRAP_Z_MM = (0.0, 255.0)        # firmware clamps z to 255
 def check_bootstrap(x: float, y: float, z: float) -> None:
     """Envelope used ONLY by `--jog --bootstrap` before config.py has reach limits.
 
-    Small keyboard steps, owner present, firmware limits as the outer bound. Never used by pick.py.
+    Small keyboard steps with you at the rig, firmware limits as the outer bound. Never used by pick.py.
     """
     r = math.hypot(x, y)
     if not BOOTSTRAP_RADIUS_MM[0] <= r <= BOOTSTRAP_RADIUS_MM[1]:
@@ -267,7 +267,7 @@ class Arm:
 
     @property
     def cleared(self) -> bool:
-        """True once the owner has authorised motion this session (or in dry-run)."""
+        """True once motion has been authorised this session (or in dry-run)."""
         return self._cleared or self.dry_run
 
     def wait_ready(self, timeout: float = READY_TIMEOUT_S) -> tuple[int, int, int] | None:
@@ -297,9 +297,9 @@ class Arm:
             return
         answer = _cooked_input("Workspace clear? Arm is about to move. [y/N] ").strip().lower()
         if answer != "y":
-            raise ArmError("owner did not confirm the workspace is clear; aborting before any motion")
+            raise ArmError("workspace not confirmed clear; aborting before any motion")
         self._cleared = True
-        self.log.info("arm: owner confirmed workspace clear")
+        self.log.info("arm: workspace confirmed clear")
 
     # -- low level ------------------------------------------------------------
     def _send(self, frame: bytes) -> None:
@@ -612,8 +612,8 @@ def main() -> None:
     args = ap.parse_args()
     if args.bootstrap and not args.jog:
         ap.error("--bootstrap only applies to --jog")
-    if args.jog and not args.bootstrap and config.missing_owner_values():
-        ap.error(f"config.py still has {config.missing_owner_values()} unset; use --jog --bootstrap to find them")
+    if args.jog and not args.bootstrap and config.missing_values():
+        ap.error(f"config.py still has {config.missing_values()} unset; use --jog --bootstrap to find them")
     runlog.start_run("arm")
     if args.probe:
         _probe(args.port or config.SERIAL_PORT)

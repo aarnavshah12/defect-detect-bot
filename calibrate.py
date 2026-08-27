@@ -370,10 +370,10 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
                  carry: bool = False):
     """Core of --auto, with injectable I/O so it can be tested offline.
 
-    Manual (carry=False): for each (x, y) the cup stops above the spot, the owner slides the block under it and
+    Manual (carry=False): for each (x, y) the cup stops above the spot, you slide the block under it and
     presses Enter, the arm goes home, the camera records the block's bbox centre.
 
-    Carry (carry=True): the owner centres the block under the cup ONCE; the arm picks it up and, for each
+    Carry (carry=True): you centre the block under the cup ONCE; the arm picks it up and, for each
     (x, y), sets it down there, goes home, lets the camera record it, then picks it back up. Placement is then
     the arm's repeatability, not a human's eye. A block that failed to lift is caught because the camera then
     sees it at the previous spot.
@@ -461,7 +461,7 @@ def auto_collect(points, arm, grab, detector, ask, target_class: str, table_z: f
         else:
             ax, ay = placed_xy
         arm.home()
-        arm.wait(1.5)  # let the arm clear the view, the owner's hand leave, and the camera settle
+        arm.wait(1.5)  # let the arm clear the view, hands leave, and the camera settle
         seen = _steady_detection(grab, detector, target_class, arm, log, k)
         if seen is None:
             log.warning("point %d: no %s seen steadily by the camera after the arm moved away - skipped "
