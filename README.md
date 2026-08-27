@@ -63,5 +63,6 @@ To measure them: `python arm.py --jog --bootstrap` (keyboard jog; `t` = table Z,
 | `compose_demo.py` | Side-by-side demo video: a phone clip of the arm + the overlay rebuilt from the run log (`--offset` = sync). |
 | `dashboard_demo.py` | Dashboard-style demo video: model boxes on the phone clip + live metrics/table/schematic from the run log. |
 | `panel_demo.py` | Stand-alone metrics panel video (black background) + title card, timed to a run log, for compositing in an editor. |
+| `rail_demo.py` | Vertical 640x1080 side rail (title, model view, cards, status, arm path) for the right third of a 1080p composite. |
 | `runlog.py` | Timestamped per-run log + saved frames. |
 | `tests/` | Offline unit tests (no hardware). |
