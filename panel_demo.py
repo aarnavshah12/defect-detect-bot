@@ -55,27 +55,30 @@ def arm_path_plot(img, x, y, w, h, moves, t_log):
 def card(img, x, y, w, h, label, value, colour=hud.WHITE, sub="", big=1.9):
     cv2.rectangle(img, (x, y), (x + w, y + h), (44, 34, 28), -1)
     cv2.line(img, (x, y), (x, y + h), hud.VIOLET, 3)
-    hud._text(img, label, (x + 20, y + 32), 0.55, hud.GRAY, 1)
-    hud._text(img, str(value), (x + 20, y + 32 + int(46 * big)), big, colour, 2)
+    hud._text(img, label, (x + 20, y + 30), 0.55, hud.GRAY, 1)
+    (vw, vh) = hud._text_w(str(value), big, 2)
+    hud._text(img, str(value), (x + 20, y + 38 + vh), big, colour, 2)  # value sits just under the label
     if sub:
-        hud._text(img, sub, (x + 20, y + h - 14), 0.48, hud.GRAY, 1)
+        hud._text(img, sub, (x + 20, y + h - 12), 0.46, hud.GRAY, 1)
 
 
 def title_card(w, h, title, subtitle):
     img = np.zeros((h, w, 3), np.uint8)
     hud._text(img, title, (40, 90), 1.6, hud.WHITE, 3)
     cv2.line(img, (40, 110), (40 + hud._text_w(title, 1.6, 3)[0], 110), hud.VIOLET, 4)
-    hud._text(img, subtitle, (40, 160), 0.8, hud.GRAY, 1)
+    hud._text(img, subtitle, (40, 160), 0.7, hud.GRAY, 1)
     steps = ["webcam", "RF-DETR (Roboflow)", "homography", "MaxArm", "suction", "bin"]
-    x = 40
+    x, y = 40, 210
     for i, s in enumerate(steps):
-        (tw, th) = hud._text_w(s, 0.7, 1)
-        cv2.rectangle(img, (x, 210), (x + tw + 28, 210 + th + 24), hud.VIOLET if i == 1 else (60, 48, 40), -1)
-        hud._text(img, s, (x + 14, 210 + th + 12), 0.7, hud.WHITE, 1)
-        x += tw + 28
+        (tw, th) = hud._text_w(s, 0.62, 1)
+        if x + tw + 60 > w:  # wrap
+            x, y = 40, y + th + 40
+        cv2.rectangle(img, (x, y), (x + tw + 24, y + th + 20), hud.VIOLET if i == 1 else (60, 48, 40), -1)
+        hud._text(img, s, (x + 12, y + th + 10), 0.62, hud.WHITE, 1)
+        x += tw + 24
         if i < len(steps) - 1:
-            hud._text(img, ">", (x + 8, 210 + th + 12), 0.7, hud.GRAY, 1)
-            x += 34
+            hud._text(img, ">", (x + 8, y + th + 10), 0.62, hud.GRAY, 1)
+            x += 30
     return img
 
 
@@ -89,7 +92,7 @@ def main() -> None:
     ap.add_argument("--out", default="Demo/panel.mp4")
     ap.add_argument("--target", default=config.TARGET_CLASS)
     ap.add_argument("--title", default="AUTONOMOUS DEFECT SORTING")
-    ap.add_argument("--subtitle", default="RF-DETR on Roboflow  ·  Hiwonder MaxArm  ·  every number from the run log")
+    ap.add_argument("--subtitle", default="RF-DETR on Roboflow  -  Hiwonder MaxArm  -  every number from the run log")
     args = ap.parse_args()
     W, H = (int(v) for v in args.size.split("x"))
 
@@ -113,7 +116,7 @@ def main() -> None:
         hud._text(img, args.title, (20, 36), 0.75, hud.WHITE, 2)
         cv2.line(img, (20, 48), (20 + hud._text_w(args.title, 0.75, 2)[0], 48), hud.VIOLET, 3)
         # cards: 2 columns
-        cw, ch, gap = (W - 60) // 2, 108, 12
+        cw, ch, gap = (W - 60) // 2, 120, 12
         left = rep.remaining
         card(img, 20, 66, cw, ch, f"{args.target.upper()}S LEFT", left, hud.RED if left else hud.GREEN,
              sub=f"of {total if total is not None else '-'} detected")
