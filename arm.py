@@ -233,6 +233,7 @@ class Arm:
         self._ser = None
         self._cleared = False
         self._last_pos: tuple[int, int, int] | None = None  # last position read back (for diagnostics)
+        self.tick = None  # optional callable pumped every ~50 ms during waits (keeps a UI window live)
         self.log = runlog.get_logger()
 
     # -- connection -------------------------------------------------------------
@@ -434,9 +435,18 @@ class Arm:
         self.log.info("arm: valve close")
         self._send(nozzle_frame(NOZZLE_VALVE_CLOSE))
 
-    @staticmethod
-    def wait(seconds: float) -> None:
-        time.sleep(max(0.0, seconds))
+    def wait(self, seconds: float) -> None:
+        """Sleep, pumping self.tick (if set) so a UI can keep drawing while the arm moves."""
+        end = time.time() + max(0.0, seconds)
+        if self.tick is None:
+            time.sleep(max(0.0, seconds))
+            return
+        while True:
+            self.tick()
+            left = end - time.time()
+            if left <= 0:
+                return
+            time.sleep(min(0.05, left))
 
 
 # ---------------------------------------------------------------- CLI

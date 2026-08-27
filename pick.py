@@ -17,9 +17,12 @@ import time
 
 import cv2
 
+import numpy as np
+
 import arm as arm_mod
 import config
 import detect
+import hud
 import mapping
 import runlog
 
@@ -78,21 +81,20 @@ class PickLoop:
         n = sum(detect.is_target(d, self.target_class) for d in dets)
         self.log.info("%s: %d detections, %d %s", tag, len(dets), n, self.target_class)
 
+    # -- demo overlay -------------------------------------------------------------
+    last_dets: list = []
+    last_target = None
+    last_xy = None
+    done = False
+
     def _panel(self, vis):
-        """Draw the status panel (bottom-left) on a copy of vis."""
+        """Status bar (+ DONE banner) on a copy of vis."""
         vis = vis.copy()
-        h, w = vis.shape[:2]
-        lines = [
-            (f"{self.target_class.upper()} LEFT: {self.remaining}", (80, 80, 255) if self.remaining else (80, 220, 80)),
-            (f"other blocks: {self.others}    picked: {self.picks}    skipped: {len(self.ignored)}", (230, 230, 230)),
-            (f"{'DRY RUN  ' if self.dry_run else ''}{self.state}", (0, 200, 255)),
-            (f"cycle {self.cycle_no}   {int(time.time() - self.t0)}s   {self.last_event}", (180, 180, 180)),
-        ]
-        ph = 34 * len(lines) + 20
-        cv2.rectangle(vis, (0, h - ph), (min(w, 760), h), (20, 20, 20), -1)
-        for i, (text, colour) in enumerate(lines):
-            cv2.putText(vis, text, (14, h - ph + 32 + 34 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.85 if i == 0 else 0.7,
-                        colour, 2)
+        hud.status_bar(vis, target_class=self.target_class, left=self.remaining, picked=self.picks,
+                       skipped=len(self.ignored), others=self.others, state=self.state, cycle=self.cycle_no,
+                       seconds=int(time.time() - self.t0), event=self.last_event, dry_run=self.dry_run)
+        if self.done:
+            hud.banner(vis, f"DONE  -  {self.picks} {self.target_class.upper()} REMOVED")
         return vis
 
     def _render(self, state: str | None = None) -> None:
@@ -102,17 +104,34 @@ class PickLoop:
             self.show(self._panel(self.last_vis))
 
     def _annotate(self, frame, dets, target: detect.Detection | None, x: float | None, y: float | None):
-        vis = detect.draw(frame, dets, self.target_class)
+        """Boxes with label tabs; the target framed in violet with corner brackets; ignored spots crossed."""
+        vis = frame.copy()
+        for d in dets:
+            is_t = detect.is_target(d, self.target_class)
+            x1, y1, x2, y2 = d.bbox
+            if target is not None and d is target:
+                continue
+            hud.box(vis, x1, y1, x2, y2, f"{d.cls} {d.conf:.2f}", hud.RED if is_t else hud.GREEN, 2 if is_t else 1)
         if target is not None:
-            cv2.circle(vis, (int(target.cx), int(target.cy)), 14, (255, 255, 255), 2)
-            cv2.putText(vis, f"pick -> arm ({x:.0f}, {y:.0f}, {self.pick_z:.0f})",
-                        (int(target.cx) + 16, int(target.cy) + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                        (255, 255, 255), 2)
+            x1, y1, x2, y2 = target.bbox
+            hud.box(vis, x1, y1, x2, y2, f"{target.cls} {target.conf:.2f}  PICK", hud.VIOLET, 3)
+            hud.brackets(vis, x1 - 6, y1 - 6, x2 + 6, y2 + 6, hud.VIOLET)
+            cv2.circle(vis, (int(target.cx), int(target.cy)), 6, hud.VIOLET, -1, cv2.LINE_AA)
+            hud._text(vis, f"arm ({x:.0f}, {y:.0f})", (x1, y2 + 26), 0.6, hud.VIOLET, 1)
         for spot in self.ignored:
-            cv2.drawMarker(vis, (int(spot[0]), int(spot[1])), (0, 0, 0), cv2.MARKER_TILTED_CROSS, 20, 2)
+            cv2.drawMarker(vis, (int(spot[0]), int(spot[1])), hud.GRAY, cv2.MARKER_TILTED_CROSS, 26, 3)
         for spot in self.planned:
-            cv2.drawMarker(vis, (int(spot[0]), int(spot[1])), (255, 255, 255), cv2.MARKER_SQUARE, 20, 1)
+            cv2.drawMarker(vis, (int(spot[0]), int(spot[1])), hud.WHITE, cv2.MARKER_SQUARE, 20, 1)
+        self.last_dets, self.last_target, self.last_xy = dets, target, (x, y)
         return vis
+
+    def live_tick(self, frame) -> None:
+        """Called during arm waits with a fresh camera frame: redraw the last boxes + status on it."""
+        if self.show is None:
+            return
+        t, xy = self.last_target, self.last_xy
+        self.last_vis = self._annotate(frame, self.last_dets, t, *(xy if xy else (None, None)))
+        self.show(self._panel(self.last_vis))
 
     def _lift_failed(self, target: detect.Detection) -> bool:
         """Re-detect; True if a target-class block is still at the pick spot."""
@@ -141,7 +160,8 @@ class PickLoop:
             self.log.info("no %s left to pick (%d ignored spots, %d planned) -> done",
                           self.target_class, len(self.ignored), len(self.planned))
             self.last_vis = self._annotate(frame, dets, None, None, None)
-            self._render("DONE - table clear of " + self.target_class)
+            self.done = True
+            self._render("done")
             return "done"
         target = max(candidates, key=lambda d: d.conf)
         x, y = mapping.pixel_to_arm(target.cx, target.cy, self.H)
@@ -257,6 +277,22 @@ class PickLoop:
         return self.picks
 
 
+def _zoom_crop(H, frame_wh, margin=70):
+    """Pixel crop covering config.PICK_AREA (mapped back through the homography) plus a margin."""
+    bx, by = config.PICK_AREA_X_MM, config.PICK_AREA_Y_MM
+    if bx is None or by is None:
+        return None
+    Hinv = np.linalg.inv(H)
+    corners = np.array([[[bx[0], by[0]]], [[bx[1], by[0]]], [[bx[1], by[1]]], [[bx[0], by[1]]]], dtype=np.float64)
+    pts = cv2.perspectiveTransform(corners, Hinv).reshape(-1, 2)
+    w, h = frame_wh
+    x0, y0 = max(0, int(pts[:, 0].min()) - margin), max(0, int(pts[:, 1].min()) - margin)
+    x1, y1 = min(w, int(pts[:, 0].max()) + margin), min(h, int(pts[:, 1].max()) + margin)
+    if x1 - x0 < 300 or y1 - y0 < 200:
+        return None
+    return x0, y0, x1, y1
+
+
 def check_fixed_targets() -> None:
     """Validate home, drop, drop hover and pick hover against the reach envelope before anything moves.
 
@@ -303,6 +339,8 @@ def main() -> None:
     ap.add_argument("--max-cycles", type=int, default=20)
     ap.add_argument("--countdown", type=float, default=5.0,
                     help="seconds to show the live window before anything moves (arrange windows for a demo)")
+    ap.add_argument("--zoom", action="store_true", help="crop the window to the pick area (blocks fill the frame)")
+    ap.add_argument("--record", metavar="FILE.mp4", help="record the overlay window to a video file")
     ap.add_argument("--no-window", action="store_true")
     args = ap.parse_args()
 
@@ -323,10 +361,24 @@ def main() -> None:
     camera = config.WEBCAM_INDEX if args.camera is None else args.camera
     cap = detect.open_camera(camera)
     mapping.check_frame_size(cal, detect.grab(cap))
+    crop = _zoom_crop(H, (config.FRAME_WIDTH, config.FRAME_HEIGHT)) if args.zoom else None
+    writer = None
     show = None
     if not args.no_window:
+        cv2.namedWindow("pick", cv2.WINDOW_NORMAL)
+
         def show(vis):
+            nonlocal writer
+            if crop is not None:
+                x0, y0, x1, y1 = crop
+                vis = vis[y0:y1, x0:x1]
             cv2.imshow("pick", vis)
+            if args.record:
+                if writer is None:
+                    hh, ww = vis.shape[:2]
+                    writer = cv2.VideoWriter(args.record, cv2.VideoWriter_fourcc(*"mp4v"), 15, (ww, hh))
+                    log.info("recording overlay to %s (%dx%d)", args.record, ww, hh)
+                writer.write(vis)
             cv2.waitKey(1)
     a = arm_mod.Arm(dry_run=args.dry_run).connect()
     try:
@@ -336,15 +388,23 @@ def main() -> None:
             while time.time() < t_end:
                 ok, frame = cap.read()
                 if ok:
-                    vis = detect.draw(frame, det.detect(frame), args.target_class)
-                    left = int(t_end - time.time()) + 1
-                    cv2.putText(vis, f"starting in {left}", (40, 110), cv2.FONT_HERSHEY_SIMPLEX, 3.0, (0, 0, 0), 10)
-                    cv2.putText(vis, f"starting in {left}", (40, 110), cv2.FONT_HERSHEY_SIMPLEX, 3.0, (255, 255, 255), 4)
-                    cv2.imshow("pick", vis)
+                    vis = frame.copy()
+                    for d in det.detect(frame):
+                        x1, y1, x2, y2 = d.bbox
+                        is_t = detect.is_target(d, args.target_class)
+                        hud.box(vis, x1, y1, x2, y2, f"{d.cls} {d.conf:.2f}", hud.RED if is_t else hud.GREEN, 2 if is_t else 1)
+                    hud.countdown(vis, int(t_end - time.time()) + 1)
+                    show(vis)
                 if (cv2.waitKey(50) & 0xFF) == ord("q"):
                     raise SystemExit("cancelled during countdown")
         loop = PickLoop(det, a, lambda: detect.grab(cap), H, target_class=args.target_class,
                         dry_run=args.dry_run, once=args.once, max_cycles=args.max_cycles, show=show)
+        if show:
+            def tick():
+                ok, frame = cap.read()
+                if ok:
+                    loop.live_tick(frame)
+            a.tick = tick
         loop.run()
         if show:
             log.info("finished; press any key in the window to close")
@@ -361,6 +421,9 @@ def main() -> None:
         finally:
             a.close()
             cap.release()
+            if writer is not None:
+                writer.release()
+                log.info("saved recording %s", args.record)
             cv2.destroyAllWindows()
 
 

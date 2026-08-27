@@ -58,6 +58,7 @@ To measure them: `python arm.py --jog --bootstrap` (keyboard jog; `t` = table Z,
 | `calibrate.py` | Click-to-calibrate, verify mode, offline check. Writes `calibration.npy`. |
 | `mapping.py` | `load_homography()`, `pixel_to_arm(px, py)` via `cv2.perspectiveTransform`. |
 | `arm.py` | MaxArm serial protocol wrapper: `connect`, `home`, `move_to`, `suction`, `wait`; safety envelope. |
-| `pick.py` | Main loop: `--dry-run`, `--once`, `--class`. |
+| `pick.py` | Main loop: `--dry-run`, `--once`, `--class`, `--zoom` (crop to the pick area), `--record demo.mp4` (record the overlay), `--countdown N`. |
+| `hud.py` | Demo overlay drawing (status bar, label tabs, target brackets, banner). |
 | `runlog.py` | Timestamped per-run log + saved frames. |
 | `tests/` | Offline unit tests (no hardware). |
