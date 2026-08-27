@@ -74,11 +74,25 @@ def card(img, x, y, w, h, label, value, colour=hud.WHITE, sub="", big=1.9):
 
 def title_card(w, h, title, subtitle):
     img = np.zeros((h, w, 3), np.uint8)
-    hud._text(img, title, (40, 90), 1.6, hud.WHITE, 3)
-    cv2.line(img, (40, 110), (40 + hud._text_w(title, 1.6, 3)[0], 110), hud.VIOLET, 4)
-    hud._text(img, subtitle, (40, 160), 0.7, hud.GRAY, 1)
+    # word-wrap the title to the card width
+    scale, thick = 1.5, 3
+    lines, cur = [], ""
+    for word in title.split():
+        trial = (cur + " " + word).strip()
+        if hud._text_w(trial, scale, thick)[0] > w - 80 and cur:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = trial
+    lines.append(cur)
+    y = 90
+    for ln in lines:
+        hud._text(img, ln, (40, y), scale, hud.WHITE, thick)
+        y += 64
+    cv2.line(img, (40, y - 44), (40 + hud._text_w(lines[-1], scale, thick)[0], y - 44), hud.VIOLET, 4)
+    hud._text(img, subtitle, (40, y + 6), 0.7, hud.GRAY, 1)
     steps = ["webcam", "RF-DETR (Roboflow)", "homography", "MaxArm", "suction", "bin"]
-    x, y = 40, 210
+    x, y = 40, y + 50
     for i, s in enumerate(steps):
         (tw, th) = hud._text_w(s, 0.62, 1)
         if x + tw + 60 > w:  # wrap
